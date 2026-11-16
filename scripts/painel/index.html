@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orquestração ao vivo</title>
+<style>
+:root{
+  --bg:#03060a; --panel:rgba(5,12,20,.82); --edge:rgba(56,189,248,.28); --ui:#38bdf8; --text:#d6e4f0; --mute:#5b7083; --faint:#1c2a38;
+  --claude:#ff8a4c; --codex:#e6f1ff; --agy:#a78bfa; --agy2:#f472b6; --done:#34d399; --fail:#f87171; --warn:#fbbf24;
+  --hi:#ffffff; --hdr:rgba(3,6,10,.95); --codebg:#02050a;
+  --mono:'Cascadia Code','Cascadia Mono','JetBrains Mono',Consolas,ui-monospace,monospace;
+}
+/* tema claro (tecla T) */
+:root[data-theme=light]{--bg:#e9f0f6;--panel:rgba(255,255,255,.9);--edge:rgba(2,132,199,.38);--ui:#0284c7;--text:#12263a;--mute:#5f7488;--faint:#d3dee8;
+  --codex:#334155;--agy:#7c3aed;--agy2:#db2777;--claude:#ea580c;--done:#059669;--fail:#dc2626;--warn:#b45309;--hi:#0b1520;--hdr:rgba(233,240,246,.96);--codebg:#f4f8fb}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:12px/1.45 var(--mono);overflow:hidden}
+#globe{position:fixed;inset:0;width:100vw;height:100vh;cursor:grab;touch-action:none}
+#globe.drag{cursor:grabbing} #globe.hover{cursor:pointer}
+.hud{position:fixed;z-index:2;background:var(--panel);border:1px solid var(--edge);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.hud:before,.hud:after{content:"";position:absolute;width:14px;height:14px;border:2px solid var(--ui);pointer-events:none}
+.hud:before{left:-1px;top:-1px;border-right:0;border-bottom:0} .hud:after{right:-1px;bottom:-1px;border-left:0;border-top:0}
+header{position:fixed;z-index:3;left:0;right:0;top:0;height:44px;display:flex;align-items:center;gap:14px;padding:0 18px;
+  background:linear-gradient(180deg,var(--hdr),transparent);pointer-events:none}
+header b{font-size:15px;letter-spacing:.06em} header .sep{color:var(--edge)}
+.live{color:var(--fail);font-weight:700;display:flex;align-items:center;gap:6px}
+.live i{width:8px;height:8px;border-radius:50%;background:var(--fail);box-shadow:0 0 10px var(--fail);animation:blink 1s steps(2) infinite}
+.live.off{color:var(--mute)} .live.off i{background:var(--mute);box-shadow:none;animation:none}
+@keyframes blink{50%{opacity:.25}}
+header .stats{margin-left:auto;color:var(--ui);font-weight:600;letter-spacing:.04em} header .clock{color:var(--mute)}
+/* lista de tasks */
+#list{left:16px;top:58px;width:300px;max-height:calc(100vh - 110px);display:flex;flex-direction:column}
+.ph{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 8px;border-bottom:1px solid var(--faint);color:var(--mute);font-weight:700;letter-spacing:.12em;font-size:10px}
+#items{overflow:auto;padding:6px}
+.it{display:grid;grid-template-columns:10px 1fr auto;gap:2px 10px;align-items:center;padding:8px 8px;border:1px solid transparent;cursor:pointer}
+.it:hover{background:rgba(56,189,248,.06);border-color:var(--faint)} .it.sel{background:rgba(56,189,248,.10);border-color:var(--edge)}
+.it .d{width:8px;height:8px;transform:rotate(45deg);grid-row:span 2}
+.it .w{font-weight:700;font-size:12px} .it .tag{font-size:10px;font-weight:700;text-align:right}
+.it .id{color:var(--mute);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .it .tm{color:var(--mute);font-size:10px;text-align:right}
+.it .bar{grid-column:2/4;height:2px;background:var(--faint);position:relative;overflow:hidden}
+.it .bar i{position:absolute;inset:0 auto 0 0;width:30%;animation:scan 1.6s linear infinite}
+@keyframes scan{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
+/* terminal */
+#term{right:16px;top:58px;width:min(560px,42vw);height:calc(100vh - 110px);display:flex;flex-direction:column}
+#term .meta{padding:10px 12px;border-bottom:1px solid var(--faint)}
+#term .meta .t1{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap} #term .meta .t1 b{font-size:14px}
+#term .meta .t2{color:var(--mute);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#term .meta .t3{display:flex;gap:16px;margin-top:8px;color:var(--mute);font-size:10px;letter-spacing:.08em} #term .meta .t3 span b{color:var(--text);font-size:12px;letter-spacing:0;margin-left:5px}
+.tabs{display:flex;gap:2px;padding:6px 8px 0;border-bottom:1px solid var(--faint)}
+.tabs button{all:unset;cursor:pointer;padding:6px 10px;color:var(--mute);font-weight:700;font-size:10px;letter-spacing:.12em;border-bottom:2px solid transparent}
+.tabs button.on{color:var(--ui);border-color:var(--ui)} .tabs .x{margin-left:auto}
+#out{flex:1;overflow:auto;margin:0;padding:10px 12px;white-space:pre-wrap;word-break:break-word;font-size:11.5px;line-height:1.5}
+#out .add{color:#34d399aa} #out .del{color:#f87171aa} #out .k{color:var(--ui);font-weight:700} #out .say{color:var(--claude)} #out .th{color:var(--agy)} #out .last{color:var(--hi)}
+#out .cur{display:inline-block;width:7px;height:13px;background:var(--ui);vertical-align:-2px;animation:blink .8s steps(2) infinite}
+.feed{border-bottom:1px solid var(--faint);padding:8px 2px;cursor:pointer} .feed:hover{background:rgba(56,189,248,.05)}
+.feed .fh{display:flex;gap:8px;font-weight:700;font-size:11px;margin-bottom:4px} .feed .fh span{color:var(--mute);font-weight:400}
+.feed .fl{color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .feed .fl:last-child{color:var(--text)}
+.hb{display:block;width:100%;height:24px}
+.it .hb{grid-column:2/4;height:28px;margin-top:3px}
+#term .meta .hb{height:56px;margin-top:8px}
+.feed .hb{height:26px;margin:2px 0 4px}
+/* aba REPORT: markdown renderizado */
+#out.md{white-space:normal;font-size:12px;line-height:1.6}
+#out.md h1,#out.md h2,#out.md h3,#out.md h4{color:var(--ui);margin:18px 0 8px;letter-spacing:.04em;font-weight:700}
+#out.md h1{font-size:15px;margin-top:2px;padding-bottom:6px;border-bottom:1px solid var(--edge)} #out.md h2{font-size:13px;text-transform:uppercase;letter-spacing:.1em}
+#out.md h2:before{content:"▸ ";color:var(--claude)} #out.md h3{font-size:12px;color:var(--text)}
+#out.md p{margin:6px 0} #out.md strong{color:var(--hi)} #out.md em{color:var(--agy)}
+#out.md ul,#out.md ol{margin:6px 0;padding-left:20px} #out.md li{margin:3px 0} #out.md li::marker{color:var(--ui)}
+#out.md li.task{list-style:none;margin-left:-18px} #out.md .cb{display:inline-block;width:12px;height:12px;border:1px solid var(--mute);margin-right:8px;vertical-align:-2px;text-align:center;line-height:11px;font-size:10px}
+#out.md .cb.on{border-color:var(--done);background:rgba(52,211,153,.15);color:var(--done)}
+#out.md code{background:rgba(56,189,248,.08);border:1px solid var(--faint);padding:0 4px;color:#9fdcf7;font-size:11px}
+#out.md pre{background:var(--codebg);border:1px solid var(--faint);padding:10px;overflow:auto;white-space:pre} #out.md pre code{background:none;border:0;padding:0}
+#out.md blockquote{margin:8px 0;padding:4px 12px;border-left:2px solid var(--agy);color:var(--mute)}
+#out.md hr{border:0;border-top:1px dashed var(--edge);margin:14px 0}
+#out.md a{color:var(--ui)}
+#out.md .tw{overflow-x:auto;margin:8px 0}
+#out.md table{border-collapse:collapse;width:100%;font-size:11.5px}
+#out.md th{background:rgba(56,189,248,.10);color:var(--ui);text-align:left;font-weight:700;letter-spacing:.06em;font-size:10.5px;text-transform:uppercase}
+#out.md th,#out.md td{border:1px solid var(--faint);padding:6px 9px;vertical-align:top} #out.md th{white-space:nowrap}
+#out.md td:first-child{white-space:nowrap;color:var(--hi)}
+#out.md tr:nth-child(even) td{background:rgba(255,255,255,.02)} #out.md tr:hover td{background:rgba(56,189,248,.05)}
+#out.md .pill{display:inline-block;padding:0 6px;border:1px solid;font-weight:700;font-size:10.5px;letter-spacing:.04em}
+#follow{all:unset;cursor:pointer;color:var(--mute);font-size:10px;padding:6px 12px;border-top:1px solid var(--faint)} #follow.on{color:var(--ui)}
+/* alertas, governança, diff, máquina, raias */
+.sys{display:flex;gap:14px;margin-left:auto;align-items:center}
+.gauge{display:flex;align-items:center;gap:6px;color:var(--mute);font-size:10px;letter-spacing:.08em}
+.gauge .gb{width:54px;height:5px;background:var(--faint);position:relative;overflow:hidden} .gauge .gb i{position:absolute;inset:0 auto 0 0;background:var(--ui);transition:width .6s}
+.gauge b{color:var(--text);font-size:11px;letter-spacing:0}
+header .stats{margin-left:0}
+#bell,.hbtn{all:unset;pointer-events:auto;cursor:pointer;color:var(--mute);font-size:10px;font-weight:700;letter-spacing:.1em;border:1px solid var(--faint);padding:3px 8px}
+#bell.on{color:var(--warn);border-color:var(--warn)} .hbtn.on{color:var(--ui);border-color:var(--ui)}
+#toasts{position:fixed;z-index:6;top:52px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:6px;align-items:center}
+#toasts .hud{position:relative;padding:8px 14px;cursor:pointer;font-weight:700;animation:tin .35s ease-out}
+@keyframes tin{from{opacity:0;transform:translateY(-8px)}}
+.warnbar{margin-top:8px;padding:5px 8px;border:1px solid;font-weight:700;font-size:11px;animation:blink 1.2s steps(2) infinite}
+#term .meta .t4{display:flex;gap:16px;margin-top:4px;color:var(--mute);font-size:10px;letter-spacing:.08em;flex-wrap:wrap} #term .meta .t4 span b{color:var(--text);font-size:12px;letter-spacing:0;margin-left:5px}
+#term .meta .cpu{display:block;width:100%;height:34px;margin-top:4px}
+.df{display:grid;grid-template-columns:22px 1fr auto auto;gap:0 10px;padding:3px 6px;cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.df:hover{background:rgba(56,189,248,.06)} .df.sel{border-color:var(--edge);background:rgba(56,189,248,.10)}
+.df span:nth-child(2){overflow:hidden;text-overflow:ellipsis} .df.cmp{grid-template-columns:78px 1fr} .df .o{color:var(--fail);font-weight:700}
+#out .dadd{color:#4ade80} #out .ddel{color:#f87171} #out .dh{color:var(--ui)} #out .dm{color:var(--mute)}
+.dsep{border-top:1px dashed var(--edge);margin:8px 0}
+#lanes{left:332px;right:calc(min(560px,42vw) + 32px);bottom:30px;height:164px;display:flex;flex-direction:column}
+#lanes canvas{display:block;width:100%;flex:1;min-height:0;cursor:pointer}
+/* replay do dia: barra de tempo embaixo das raias */
+#rbar{display:flex;align-items:center;gap:8px;padding:2px 8px 5px;font-size:10px;color:var(--mute)}
+#rbar button{all:unset;cursor:pointer;color:var(--ui);font-weight:700;letter-spacing:.06em;padding:1px 6px;border:1px solid var(--faint)}
+#rbar button.on{color:var(--warn);border-color:var(--warn)}
+#rpos{flex:1;accent-color:var(--warn);height:12px;min-width:60px}
+#rlbl{white-space:nowrap;font-weight:700;color:var(--text);min-width:92px;text-align:right}
+body.replay #rlbl{color:var(--warn)}
+/* filtro e busca das tasks */
+#flt{padding:6px 8px 4px;border-bottom:1px solid var(--faint)}
+#q{all:unset;box-sizing:border-box;width:100%;padding:4px 7px;border:1px solid var(--faint);color:var(--text);font-size:11px;background:rgba(56,189,248,.04)}
+#q:focus{border-color:var(--edge)}
+#chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.chip{all:unset;cursor:pointer;font-size:9.5px;font-weight:700;letter-spacing:.06em;padding:1px 6px;border:1px solid var(--faint);color:var(--mute)}
+.chip b{margin-left:4px;color:var(--text)} .chip.on{border-color:var(--ui);color:var(--ui)}
+/* modo apresentação (tecla P): só o globo e as raias */
+body.pres #list,body.pres #term,body.pres #hint,body.pres #stats,body.pres .clock{display:none!important}
+body.pres #lanes{left:16px!important;right:16px!important}
+/* ajuda dos atalhos */
+#help{position:fixed;z-index:8;left:50%;top:50%;transform:translate(-50%,-50%);padding:16px 20px;display:none;min-width:300px}
+#help.on{display:block} #help h3{margin:0 0 10px;color:var(--ui);font-size:12px;letter-spacing:.12em}
+#help td{padding:2px 10px 2px 0} #help td:first-child{color:var(--warn);font-weight:700;white-space:nowrap}
+/* DIFF: comparar rodadas */
+.dmodes{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+.dmode{all:unset;cursor:pointer;font-size:10px;font-weight:700;letter-spacing:.06em;padding:2px 8px;border:1px solid var(--faint);color:var(--mute)}
+.dmode.on{border-color:var(--claude);color:var(--claude)}
+.sbs{display:grid;grid-template-columns:1fr 1fr;gap:8px} .sbs>div{min-width:0}
+.sbh{font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--ui);margin-bottom:4px}
+.sbs pre{margin:0;overflow:auto;white-space:pre;font-size:10.5px;border:1px solid var(--faint);padding:6px;background:var(--codebg)}
+.st-mudou{color:var(--warn)} .st-novo{color:var(--claude)} .st-igual{color:var(--mute)} .st-revertido{color:var(--fail)}
+#hint{position:fixed;z-index:2;left:50%;bottom:10px;transform:translateX(-50%);color:var(--mute);font-size:10px;letter-spacing:.14em;pointer-events:none;white-space:nowrap}
+#tip{position:fixed;z-index:4;pointer-events:none;padding:6px 9px;font-size:11px;display:none;white-space:nowrap}
+/* responsividade: o globo ocupa o espaço que sobra entre os cards (calculado no JS a partir dos retângulos) */
+header>*{white-space:nowrap;flex-shrink:0}
+#term .meta .t3{flex-wrap:wrap;row-gap:4px}
+.tabs{overflow-x:auto;scrollbar-width:none} .tabs::-webkit-scrollbar{display:none} .tabs button{flex-shrink:0}
+@media (max-width:1440px){ header .clock{display:none} .gauge .gb{width:40px} }
+/* notebook: cards mais estreitos, raias embaixo da lista em largura cheia */
+@media (max-width:1280px) and (min-width:901px){
+  header{gap:10px;padding:0 12px} .sys{gap:10px} header .stats{font-size:10px}
+  #list{width:250px;max-height:calc(100vh - 58px - 164px - 46px)}
+  #term{width:min(460px,40vw)}
+  #lanes{left:16px;right:calc(min(460px,40vw) + 32px)}
+  .it{padding:7px 6px;gap:2px 8px}
+}
+@media (max-width:1180px) and (min-width:901px){ header .stats{display:none} #bell{white-space:nowrap} }
+@media (max-width:1080px) and (min-width:901px){ .gauge .gb{display:none} #plang .gb{display:block;width:44px!important} }
+/* tablet e celular: página rolável — cabeçalho fixo, globo, cards em grade, raias, terminal */
+@media (max-width:900px){
+  html{height:100%;overflow:hidden} body{height:100%;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column}
+  header{position:sticky;order:0;height:auto;min-height:44px;flex-wrap:wrap;row-gap:4px;padding:8px 12px;background:var(--hdr);border-bottom:1px solid var(--faint);pointer-events:auto}
+  header .stats{display:none} #bell{margin-left:auto;order:2}
+  .sys{order:3;flex-basis:100%;margin-left:0;overflow-x:auto;scrollbar-width:none;gap:12px} .sys::-webkit-scrollbar{display:none}
+  .gauge{flex-shrink:0} .gauge .gb{width:34px}
+  #globe{position:relative;order:1;flex:none;width:100%;height:min(56vh,520px);touch-action:pan-y}
+  .hud#list,.hud#lanes,.hud#term{position:relative;inset:auto;flex:none;width:auto;margin:0 8px 10px}
+  #list{order:2;max-height:none} #term{scroll-margin-top:70px} #lanes{order:3;height:170px} #term{order:4;height:max(78vh,440px);margin-bottom:16px}
+  #items{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:4px;overflow:visible;padding:6px}
+  .it{border-color:var(--faint)}
+  #hint{display:none} #toasts{top:auto;bottom:12px;width:calc(100% - 24px)} #toasts .hud{max-width:100%;white-space:normal}
+}
+@media (max-width:520px){
+  header b{font-size:13px} header .sep{display:none} #bpres,#bhelp{display:none}
+  #globe{height:min(48vh,400px)}
+  #items{grid-template-columns:1fr}
+  #term .meta .t3,#term .meta .t4{gap:10px}
+  #term .meta .hb{height:42px}
+  .gauge .gb{display:none} #plang .gb{display:block;width:30px!important} .sys{gap:10px}
+  .tabs button{padding:6px 8px}
+}
+</style>
+</head>
+<body>
+<canvas id="globe"></canvas>
+<header>
+  <b>ORQUESTRAÇÃO</b><span class="sep">//</span><span class="live" id="live"><i></i><span>LIVE</span></span>
+  <span class="clock" id="clock"></span><span class="sys" id="sys"></span><span class="stats" id="stats"></span>
+  <button class="hbtn" id="btheme" title="tema claro / escuro (T)">◐</button><button class="hbtn" id="bpres" title="modo apresentação: só o globo e as raias (P)">⛶</button><button class="hbtn" id="bhelp" title="atalhos de teclado (?)">?</button>
+  <button id="bell" title="som e notificação do Windows quando um worker termina, falha, pede decisão ou sai do escopo">ALERTAS OFF</button>
+</header>
+<div id="toasts"></div>
+<section class="hud" id="lanes"><canvas id="lanescv"></canvas><div id="rbar"><button id="rplay" title="tocar o dia (espaço)">▶</button><button id="rspd" title="velocidade do replay">120×</button><input id="rpos" type="range" min="0" max="1000" value="1000" title="arraste para ver o painel numa hora passada"><span id="rlbl">AO VIVO</span><button id="rlive" title="voltar ao vivo (L)">AO VIVO</button></div></section>
+<section class="hud" id="list"><div class="ph"><span>TASKS</span><span id="ncount"></span></div><div id="flt"><input id="q" placeholder="buscar id, título ou worker  ( / )" autocomplete="off" spellcheck="false"><div id="chips"></div></div><div id="items"></div></section>
+<section class="hud" id="term">
+  <div class="meta" id="meta"></div>
+  <div class="tabs" id="tabs"></div>
+  <pre id="out"></pre>
+  <button id="follow" class="on">▼ SEGUIR O FIM DO LOG</button>
+</section>
+<div id="hint">ARRASTE PARA GIRAR · RODA PARA ZOOM · CLIQUE NUM PONTO · ? ATALHOS</div>
+<div class="hud" id="help"><h3>ATALHOS</h3><table>
+<tr><td>↑ ↓ / J K</td><td>task anterior / próxima (na ordem da lista filtrada)</td></tr>
+<tr><td>1 … 5</td><td>abas (LOG, TASK, DIFF, ARQUIVOS, REPORT · ou FEED, PLANO, MÉTRICAS)</td></tr>
+<tr><td>Esc</td><td>fecha a task, sai da apresentação ou volta ao vivo</td></tr>
+<tr><td>/</td><td>busca nas tasks</td></tr>
+<tr><td>F</td><td>próximo filtro</td></tr>
+<tr><td>Espaço</td><td>toca / pausa o replay do dia</td></tr>
+<tr><td>← →</td><td>no replay: volta / avança 5 min</td></tr>
+<tr><td>L</td><td>volta ao vivo</td></tr>
+<tr><td>P</td><td>modo apresentação</td></tr>
+<tr><td>T</td><td>tema claro / escuro</td></tr>
+<tr><td>?</td><td>esta ajuda</td></tr></table></div>
+<div class="hud" id="tip"></div>
+<script>
+'use strict';
+// ══════════ dados ══════════
+const COL = { claude: '#ff8a4c', codex: '#e6f1ff', agy: '#a78bfa', agy2: '#f472b6', '?': '#94a3b8', done: '#34d399', fail: '#f87171', idle: '#5b7083', ui: '#38bdf8', warn: '#fbbf24' };
+const NAME = { codex: 'CODEX', agy: 'ANTIGRAVITY', agy2: 'ANTIGRAVITY-2', '?': 'WORKER' };
+const $ = id => document.getElementById(id);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v)), lerp = (a, b, k) => a + (b - a) * k;
+const expoOut = u => u >= 1 ? 1 : 1 - Math.pow(2, -10 * u);
+const hash = (s, k = 0) => { let h = 2166136261 ^ k; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995); return ((h ^ (h >>> 15)) >>> 0) / 4294967295; };
+const pad2 = n => String(n).padStart(2, '0');
+const clock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${pad2(Math.floor(s / 3600))}:${pad2(Math.floor(s % 3600 / 60))}:${pad2(s % 60)}`; };
+const ago = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : Math.floor(s / 3600) + 'h' + pad2(Math.floor(s % 3600 / 60)); };
+const bytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+// alerta de governança: arquivo fora de "Arquivos permitidos" (vermelho) ou DECISION REQUIRED (amarelo)
+const wOut = t => (t.files || []).filter(f => f.out && f.by !== 'claude').map(f => f.file);   // fora do escopo pelo worker (o mestre pode mexer onde quiser)
+const oos = t => t.integrated ? 0 : wOut(t).length;   // integrada = o mestre já aceitou o escopo
+const byTag = f => f.by === 'claude' ? '<span style="color:var(--claude);font-weight:700">CLAUDE</span> ' : '';
+const alertOf = t => oos(t) ? 'scope' : t.decision ? 'decision' : null;
+const stateCol = t => t.decision ? COL.warn : t.state === 'failed' || oos(t) ? COL.fail : t.state === 'done' ? COL.done : t.state === 'stalled' ? COL.idle : (COL[t.worker] || COL['?']);
+const tagOf = t => t.integrated && t.state !== 'running' ? 'INTEGRADA' : t.decision ? 'DECISÃO' : oos(t) ? 'ESCOPO ✕' : t.state === 'running' ? 'RUNNING' : t.state === 'done' ? 'DONE' : t.state === 'failed' ? (t.violation ? 'VIOLAÇÃO' : 'FAIL') : 'IDLE';
+const gb = n => (n / 1073741824).toFixed(1);
+const fmtTok = n => n == null ? '--' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+const workTime = t => t.runs.reduce((s, r) => s + ((r.end || nowV()) - r.start), 0);
+
+// ══════════ alertas: aviso na tela sempre; som e notificação do Windows quando ligados ══════════
+let ALERT = false, actx = null;
+try { ALERT = localStorage.getItem('orq-alertas') === '1'; } catch { }
+function paintBell() { $('bell').textContent = ALERT ? 'ALERTAS ON' : 'ALERTAS OFF'; $('bell').classList.toggle('on', ALERT); }
+$('bell').addEventListener('click', () => {
+  ALERT = !ALERT; try { localStorage.setItem('orq-alertas', ALERT ? '1' : '0'); } catch { }
+  if (ALERT) { actx = actx || new AudioContext(); actx.resume(); if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); beep('ok'); }
+  paintBell();
+});
+addEventListener('pointerdown', () => { if (ALERT && !actx) actx = new AudioContext(); });   // o áudio só nasce depois de um gesto
+function beep(kind) {
+  if (!actx) return;
+  const seq = kind === 'bad' ? [[440, 0], [311, .2]] : kind === 'warn' ? [[784, 0], [784, .18], [784, .36]] : [[523, 0], [784, .14]];
+  for (const [f, dt] of seq) {
+    const o = actx.createOscillator(), gn = actx.createGain(), t0 = actx.currentTime + dt;
+    o.type = 'sine'; o.frequency.value = f; gn.gain.setValueAtTime(0, t0); gn.gain.linearRampToValueAtTime(.16, t0 + .01); gn.gain.exponentialRampToValueAtTime(.001, t0 + .4);
+    o.connect(gn).connect(actx.destination); o.start(t0); o.stop(t0 + .45);
+  }
+}
+function notify(task, msg, kind) {
+  const col = kind === 'bad' ? COL.fail : kind === 'warn' ? COL.warn : COL.done, el = document.createElement('div');
+  el.className = 'hud'; el.style.color = col; el.style.borderColor = col; el.dataset.id = task.id;
+  el.innerHTML = `${esc(NAME[task.worker] || task.worker)} · ${esc(task.id)} <span style="color:var(--text);font-weight:400">${esc(msg)}</span>`;
+  el.onclick = () => { select(task.id); el.remove(); };
+  $('toasts').prepend(el); setTimeout(() => el.remove(), kind === 'ok' ? 8000 : 20000);
+  if (!ALERT) return;
+  beep(kind);
+  if ('Notification' in window && Notification.permission === 'granted') try { new Notification(`${NAME[task.worker] || task.worker} · ${task.id}`, { body: msg, tag: task.id + kind }); } catch { }
+}
+
+let STATE = { tasks: [] }, offset = 0, lastOk = -1e9, sel = null, hoverId = null, masterKick = -9, firstPoll = true;
+const VIS = new Map();
+// ── replay do dia: com REPLAY definido, a lista, o globo, o feed e as métricas mostram o estado naquela hora ──
+let REPLAY = null, RPLAY = false, RSPD = 120, lastFrameP = performance.now(), rRender = 0, LX = null;
+const nowL = () => Date.now() + offset, nowV = () => REPLAY == null ? nowL() : REPLAY;
+const hm = ms => { const d = new Date(ms); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); };
+function atTime(t, T) {
+  const runs = (t.runs || []).filter(r => r.start <= T); if (!runs.length) return null;
+  const r = runs[runs.length - 1], open = r.end == null || r.end > T, all = runs.length === t.runs.length;
+  const state = open ? 'running' : all ? (t.state === 'running' ? 'done' : t.state) : 'done';
+  const files = t.files.filter(f => f.mtime && f.mtime <= T), ms = ((t.master && t.master.sessions) || []).filter(x => x.s <= T).map(x => ({ s: x.s, e: Math.min(x.e, T) }));
+  return { ...t, state, runs: runs.map(x => x.end && x.end > T ? { ...x, end: null } : x), started: r.start, finished: open ? null : r.end,
+    files, decision: false, decisionAnswered: false, integrated: t.integrated && t.integrated.at <= T ? t.integrated : null,
+    proc: null, lines: [], say: null, tokens: runs.filter(x => x.end && x.end <= T).reduce((a, x) => a + (x.tokens || 0), 0) || null,
+    master: { files: files.filter(f => f.by === 'claude').length, at: ms.length ? ms[ms.length - 1].e : null, sessions: ms }, lastActivity: Math.min(t.lastActivity, T) };
+}
+const VIEW = () => REPLAY == null ? STATE.tasks : STATE.tasks.map(t => atTime(t, REPLAY)).filter(Boolean);
+// ── filtro e busca ──
+const FILTERS = [['all', 'TODAS', () => true], ['running', 'RODANDO', t => t.state === 'running'], ['alert', 'ALERTA', t => !!alertOf(t)], ['decision', 'DECISÃO', t => !!t.decision],
+  ['scope', 'ESCOPO', t => oos(t) > 0], ['failed', 'FALHA', t => t.state === 'failed' || t.state === 'stalled'], ['done', 'DONE', t => t.state === 'done' && !t.integrated], ['integrated', 'INTEGRADA', t => !!t.integrated]];
+let FILT = 'all', Q = ''; try { FILT = localStorage.getItem('orq-filtro') || 'all'; } catch { }
+const fOf = k => (FILTERS.find(f => f[0] === k) || FILTERS[0])[2];
+const matchQ = t => { if (!Q) return true; const h = `${t.id} ${t.title || ''} ${t.worker} ${NAME[t.worker] || ''} ${t.repo}`.toLowerCase(); return Q.toLowerCase().split(/\s+/).every(w => h.includes(w)); };
+const shown = ts => ts.filter(t => fOf(FILT)(t) && matchQ(t));
+const globeTasks = () => { const v = VIEW(); if (FILT === 'all' && !Q) return v; const ok = new Set(shown(v).map(t => t.id)); return v.filter(t => ok.has(t.id) || t.id === sel); };
+// ── previsão de término: mediana das rodadas encerradas do mesmo worker (1ª rodada e correções separadas) ──
+function runStats(worker, corr) {
+  const d = []; for (const t of STATE.tasks) (t.runs || []).forEach((r, i) => { if (r.end && r.worker === worker && (corr == null || (i > 0) === corr) && r.end - r.start > 60e3) d.push(r.end - r.start); });
+  if (!d.length) return null; d.sort((a, b) => a - b); return { ms: d[d.length >> 1], n: d.length };
+}
+function etaOf(t) {
+  if (t.state !== 'running' || !t.runs.length) return null;
+  const i = t.runs.length - 1, r = t.runs[i], m = runStats(r.worker, i > 0) || runStats(r.worker, null); if (!m) return null;
+  return { end: r.start + m.ms, left: r.start + m.ms - nowV(), n: m.n, corr: i > 0 };
+}
+const etaTxt = e => e.left >= 0 ? '~' + ago(e.left) : '+' + ago(-e.left);
+// ── ondas: despachos com mais de 15 min de intervalo começam uma onda nova ──
+function wavesOf(tasks) {
+  const fs = tasks.filter(t => t.runs && t.runs.length).map(t => ({ t, s: t.runs[0].start })).sort((a, b) => a.s - b.s), W = [];
+  for (const x of fs) { const w = W[W.length - 1]; if (!w || x.s - w.last > 15 * 60e3) W.push({ s: x.s, last: x.s, tasks: [x.t] }); else { w.last = x.s; w.tasks.push(x.t); } }
+  return W;
+}
+// ── custo estimado: tokens do Codex × preço por 1M tokens (ajustável na aba MÉTRICAS) ──
+let USD = 2; try { USD = +localStorage.getItem('orq-usd') || 2; } catch { }
+const usd = tok => tok ? 'US$ ' + (tok / 1e6 * USD).toFixed(2) : '--';
+// ── tema e apresentação ──
+const TH = { light: false, bg: '#03060a', b0: '#0b1a28', b1: '#040a12', lbl: '#8aa0b4' };
+let PRES = false;
+function watch(was, task) {
+  if (was.state === 'running' && task.state !== 'running')
+    notify(task, task.state === 'done' ? 'terminou' + (task.reportStatus ? ' · ' + task.reportStatus : '') : task.state === 'failed' ? `falhou (exit ${task.exitCode}${task.violation ? ', violação' : ''})` : 'parou de responder', task.state === 'done' ? 'ok' : 'bad');
+  if (!was.decision && task.decision) notify(task, 'pede DECISION REQUIRED: leve a pergunta ao usuário', 'warn');
+  if (oos(task) > oos(was)) notify(task, 'mexeu fora do escopo: ' + wOut(task).filter(f => !wOut(was).includes(f)).join(', '), 'bad');
+}
+async function poll() {
+  try {
+    const s = await (await fetch('/api/state', { cache: 'no-store' })).json();
+    offset = s.now - Date.now(); lastOk = performance.now(); const t = performance.now() / 1000;
+    for (const task of s.tasks) {
+      let v = VIS.get(task.id);
+      if (!v) {
+        // posição estável no globo, tirada do id; afastada do mestre e dos outros pontos
+        let lat, lon, k = 0;
+        do { lat = -48 + hash(task.id, 11 + k) * 110; lon = -180 + hash(task.id, 7 + k) * 360; k++; }
+        while (k < 40 && ([...VIS.values()].some(o => angDist(lat, lon, o.lat, o.lon) < 24) || angDist(lat, lon, MASTER.lat, MASTER.lon) < 35));
+        v = { lat, lon, born: t, bytes: task.logBytes, files: task.files.length, kick: -9, back: [], state: task.state, endT: null, hist: [], cpu: [], seed: hash(task.id, 3) };
+        VIS.set(task.id, v);
+        if (!firstPoll && task.state === 'running') notify(task, 'despachada: começou a trabalhar', 'ok');
+      }
+      if (v.task && !firstPoll) watch(v.task, task);
+      v.cpu.push({ t, c: task.proc ? task.proc.cpu : null }); v.cpu = v.cpu.filter(h => t - h.t < 130);
+      const lastF = task.files.reduce((a, f) => f.mtime > (a ? a.mtime : 0) ? f : a, null), newF = lastF && v.lastF && lastF.mtime > v.lastF ? lastF : null;
+      if (newF && newF.by === 'claude') masterKick = t;
+      v.lastF = lastF ? lastF.mtime : 1;
+      const db = Math.max(0, task.logBytes - v.bytes), df = newF && newF.by === 'claude' ? 0 : Math.abs(task.files.length - v.files);
+      if (db > 0 || df > 0) { v.kick = t; v.back.push(t); v.hist.push({ t, a: Math.min(1, Math.log10(1 + db) / 4.5 + df * .4) }); }
+      v.hist = v.hist.filter(h => t - h.t < 120);
+      v.bytes = task.logBytes; v.files = task.files.length;
+      if (v.state === 'running' && task.state !== 'running') { v.endT = t; masterKick = t; }
+      v.state = task.state; v.task = task;
+    }
+    for (const id of [...VIS.keys()]) if (!s.tasks.find(x => x.id === id)) VIS.delete(id);
+    STATE = s; firstPoll = false; renderList(); if (!sel) renderMaster(); renderMeta();
+  } catch (e) { console.error(e); }
+  setTimeout(poll, 2000);
+}
+
+// ══════════ globo ══════════
+const cv = $('globe'), g = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() { DPR = devicePixelRatio || 1; W = cv.clientWidth; H = cv.clientHeight; cv.width = W * DPR; cv.height = H * DPR; }
+addEventListener('resize', resize); resize();
+if (window.ResizeObserver) new ResizeObserver(resize).observe(cv);
+const narrow = () => innerWidth <= 900;
+const MASTER = { lat: 18, lon: -20 };
+const rad = d => d * Math.PI / 180;
+function angDist(la1, lo1, la2, lo2) { const a = vec(la1, lo1), b = vec(la2, lo2); return Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1)) * 180 / Math.PI; }
+function vec(lat, lon) { const la = rad(lat), lo = rad(lon); return [Math.cos(la) * Math.sin(lo), Math.sin(la), Math.cos(la) * Math.cos(lo)]; }
+// pontos do planeta (esfera de Fibonacci) com "continentes" de ruído
+const DOTS = [];
+{ const N = 4200, ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < N; i++) { const y = 1 - (i + .5) / N * 2, r = Math.sqrt(1 - y * y), th = ga * i, v = [Math.cos(th) * r, y, Math.sin(th) * r];
+    const n = Math.sin(v[0] * 3.1 + 1.3) * Math.cos(v[2] * 2.7 - .4) + .6 * Math.sin(v[1] * 4.3 + v[0] * 2.1) + .35 * Math.sin(v[2] * 7.9 + v[1] * 5.3);
+    DOTS.push({ v, land: n > .05 }); } }
+// câmera: guinada, arfagem, zoom; arrastar dá inércia; parado, gira sozinho
+const cam = { yaw: rad(25), pitch: rad(-12), vy: 0, vp: 0, zoom: 1, zt: 1, target: null, lastInput: -99 };
+const D = 3.4;
+function rot(v) {
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw), cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const x = v[0] * cy + v[2] * sy, z0 = -v[0] * sy + v[2] * cy, y = v[1] * cp - z0 * sp, z = v[1] * sp + z0 * cp;
+  return [x, y, z];
+}
+let GR = 200, GX = 0, GY = 0, LBLR = 0;   // LBLR: limite direito dos rótulos (borda do terminal)
+function proj(p) { const f = D / (D - p[2]); return [GX + p[0] * GR * f, GY - p[1] * GR * f, f]; }
+const visible = p => p[2] > 1 / D || p[0] * p[0] + p[1] * p[1] > 1.02;   // na frente do horizonte, ou fora da silhueta (arcos altos)
+// arco elevado entre dois pontos (slerp + altura)
+function arcPts(a, b, n = 48) {
+  const om = Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1)), so = Math.sin(om) || 1e-6, h = .08 + om * .1, P = [];
+  for (let i = 0; i <= n; i++) { const u = i / n, k1 = Math.sin((1 - u) * om) / so, k2 = Math.sin(u * om) / so, r = 1 + h * Math.sin(Math.PI * u);
+    P.push([(a[0] * k1 + b[0] * k2) * r, (a[1] * k1 + b[1] * k2) * r, (a[2] * k1 + b[2] * k2) * r]); }
+  return P;
+}
+
+let drag = null, moved = 0;
+cv.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, t: performance.now() }; moved = 0; cam.target = null; cam.vy = cam.vp = 0; cv.setPointerCapture(e.pointerId); cv.classList.add('drag'); });
+cv.addEventListener('pointermove', e => {
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y, dt = Math.max(1, performance.now() - drag.t);
+    moved += Math.abs(dx) + Math.abs(dy);
+    const k = 1 / (GR * cam.zoom) * 1.1;
+    cam.yaw += dx * k; cam.pitch = clamp(cam.pitch + dy * k, -1.3, 1.3);
+    cam.vy = dx * k / dt * 16; cam.vp = dy * k / dt * 16; drag.x = e.clientX; drag.y = e.clientY; drag.t = performance.now(); cam.lastInput = performance.now() / 1000;
+  } else { hoverId = pick(e.clientX, e.clientY); cv.classList.toggle('hover', !!hoverId); showTip(e.clientX, e.clientY); }
+});
+cv.addEventListener('pointerup', e => { cv.classList.remove('drag'); if (drag && moved < 6) { const id = pick(e.clientX, e.clientY); select(id === sel ? null : id); } drag = null; });
+cv.addEventListener('pointerleave', () => { hoverId = null; $('tip').style.display = 'none'; });
+cv.addEventListener('wheel', e => { e.preventDefault(); cam.zt = clamp(cam.zt * Math.exp(-e.deltaY * 0.0012), .6, 2.6); cam.lastInput = performance.now() / 1000; }, { passive: false });
+let HITS = [];
+function pick(x, y) { const r = cv.getBoundingClientRect(); x -= r.left; y -= r.top; let best = null, bd = 22; for (const h of HITS) { const d = Math.hypot(h.x - x, h.y - y); if (d < bd) { bd = d; best = h.id; } } return best; }
+function showTip(x, y) {
+  const tip = $('tip'), v = hoverId && VIS.get(hoverId); if (!v || !v.task) { tip.style.display = 'none'; return; }
+  const t = v.task; tip.style.display = 'block'; tip.style.left = x + 14 + 'px'; tip.style.top = y + 12 + 'px';
+  tip.innerHTML = `<b style="color:${COL[t.worker] || '#fff'}">${NAME[t.worker] || t.worker}</b> ${esc(t.id)} <span style="color:${stateCol(t)}">${tagOf(t)}</span><br><span style="color:var(--mute)">${esc((t.title || '').slice(0, 60))}</span>`;
+}
+function focusOn(id) { const v = VIS.get(id); if (!v) return; cam.target = { yaw: -rad(v.lon), pitch: rad(v.lat) }; cam.zt = Math.max(cam.zt, 1.35); }
+
+function frame() {
+  const nowP = performance.now(), t = nowP / 1000;
+  if (REPLAY != null && RPLAY) { REPLAY += (nowP - lastFrameP) * RSPD; if (REPLAY >= nowL()) goLive(); }
+  lastFrameP = nowP;
+  if (REPLAY != null && nowP - rRender > 300) { rRender = nowP; renderList(); if (!sel) renderMaster(); renderMeta(); syncRbar(); }
+  const now = nowV();
+  // câmera
+  if (cam.target) {
+    let dy = cam.target.yaw - cam.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+    cam.yaw += dy * .08; cam.pitch += (cam.target.pitch - cam.pitch) * .08;
+    if (Math.abs(dy) < 1e-3 && Math.abs(cam.target.pitch - cam.pitch) < 1e-3) cam.target = null;
+  } else if (!drag) {
+    cam.yaw += cam.vy; cam.pitch = clamp(cam.pitch + cam.vp, -1.3, 1.3); cam.vy *= .94; cam.vp *= .94;
+    if (!sel && t - cam.lastInput > 3) cam.yaw += .0016;
+  }
+  cam.zoom += (cam.zt - cam.zoom) * .1;
+  // o globo fica no espaço livre entre a lista, o terminal e as raias (lido dos retângulos, então acompanha o CSS)
+  if (PRES) { const nr = $('lanes').getBoundingClientRect(), y1 = (nr.height ? nr.top : H) - 8; GX = W / 2; GY = (52 + y1) / 2 + 12; GR = Math.max(60, Math.min((W - 32) / 2.3, (y1 - 52) / 2.5)) * cam.zoom; LBLR = W - 6; }
+  else if (narrow()) { GX = W / 2; GY = H / 2 + 14; GR = Math.min(W / 2.5, H / 2.7) * cam.zoom; LBLR = W - 6; }
+  else {
+    const lr = $('list').getBoundingClientRect(), tr = $('term').getBoundingClientRect(), nr = $('lanes').getBoundingClientRect();
+    const x0 = lr.right + 12, x1 = tr.left - 12, y0 = 52, y1 = (nr.height && nr.right > x0 + 40 ? nr.top : H) - 8;
+    GX = (x0 + x1) / 2; GY = (y0 + y1) / 2 + 12; LBLR = tr.left - 6;
+    GR = Math.max(60, Math.min((x1 - x0) / 2.3, (y1 - y0) / 2.5)) * cam.zoom;
+  }
+
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.fillStyle = TH.bg; g.fillRect(0, 0, W, H);
+  // estrelas
+  if (!TH.light) for (let i = 0; i < 160; i++) { const sx = hash('s' + i) * W, sy = hash('y' + i) * H, tw = .3 + .7 * Math.abs(Math.sin(t * (.3 + hash('t' + i)) + i)); g.fillStyle = `rgba(150,190,230,${.25 * tw})`; g.fillRect(sx, sy, 1.2, 1.2); }
+  // atmosfera
+  const at = g.createRadialGradient(GX, GY, GR * .9, GX, GY, GR * 1.35); at.addColorStop(0, 'rgba(56,189,248,.20)'); at.addColorStop(1, 'rgba(56,189,248,0)');
+  g.fillStyle = at; g.beginPath(); g.arc(GX, GY, GR * 1.35, 0, 6.2832); g.fill();
+  const body = g.createRadialGradient(GX - GR * .3, GY - GR * .35, GR * .1, GX, GY, GR); body.addColorStop(0, TH.b0); body.addColorStop(1, TH.b1);
+  g.fillStyle = body; g.beginPath(); g.arc(GX, GY, GR, 0, 6.2832); g.fill();
+  g.strokeStyle = 'rgba(56,189,248,.45)'; g.lineWidth = 1.2; g.beginPath(); g.arc(GX, GY, GR, 0, 6.2832); g.stroke();
+  // grade de latitude/longitude
+  g.lineWidth = .8;
+  const gridLine = pts => { let open = false; g.beginPath(); for (const v of pts) { const p = rot(v); if (p[2] > 1 / D) { const s = proj(p); open ? g.lineTo(s[0], s[1]) : g.moveTo(s[0], s[1]); open = true; } else open = false; } g.stroke(); };
+  g.strokeStyle = 'rgba(56,189,248,.12)';
+  for (let la = -60; la <= 60; la += 30) { const P = []; for (let lo = -180; lo <= 180; lo += 6) P.push(vec(la, lo)); gridLine(P); }
+  for (let lo = -180; lo < 180; lo += 30) { const P = []; for (let la = -90; la <= 90; la += 6) P.push(vec(la, lo)); gridLine(P); }
+  // pontos do planeta
+  for (const d of DOTS) { const p = rot(d.v); if (p[2] < 1 / D) continue; const s = proj(p), k = clamp((p[2] - 1 / D) * 1.6);
+    g.fillStyle = d.land ? `rgba(56,189,248,${.3 + .65 * k})` : `rgba(56,189,248,${.06 + .1 * k})`; const r = d.land ? 1.7 : 1; g.fillRect(s[0] - r / 2, s[1] - r / 2, r, r); }
+  // anel orbital com marcas
+  g.save(); g.translate(GX, GY); g.rotate(-.35); g.scale(1, .28);
+  g.strokeStyle = 'rgba(56,189,248,.18)'; g.lineWidth = 1; g.beginPath(); g.arc(0, 0, GR * 1.55, 0, 6.2832); g.stroke();
+  for (let i = 0; i < 72; i++) { const a = i / 72 * 6.2832 + t * .05; if (Math.sin(a) < -.15) continue; g.beginPath(); g.moveTo(Math.cos(a) * GR * 1.52, Math.sin(a) * GR * 1.52); g.lineTo(Math.cos(a) * GR * (i % 6 ? 1.55 : 1.6), Math.sin(a) * GR * (i % 6 ? 1.55 : 1.6)); g.stroke(); }
+  const sa = t * .35; if (Math.sin(sa) > -.15) { g.fillStyle = COL.ui; g.fillRect(Math.cos(sa) * GR * 1.55 - 3, Math.sin(sa) * GR * 1.55 - 3, 6, 6); }
+  g.restore();
+
+  // anel de progresso do Plano de Implementação em volta do planeta
+  const P = STATE.plan;
+  if (P && P.found && P.total) {
+    const R = GR * 1.09, a0 = -Math.PI / 2, seg = (from, frac, col, w, glow) => { if (frac <= 0) return; g.strokeStyle = col; g.lineWidth = w; g.shadowColor = col; g.shadowBlur = glow; g.beginPath(); g.arc(GX, GY, R, a0 + from * 6.2832, a0 + (from + frac) * 6.2832); g.stroke(); g.shadowBlur = 0; };
+    seg(0, 1, 'rgba(56,189,248,.10)', 3, 0);
+    const fd = P.done / P.total, fp = P.partial / 2 / P.total, fr = P.running / P.total;
+    seg(0, fd, COL.done, 3, 10); seg(fd, fp, 'rgba(52,211,153,.45)', 3, 0); seg(fd + fp, fr, COL.ui, 3, 6 + 4 * Math.sin(t * 4));
+    // marcas das fases
+    let acc = 0; g.strokeStyle = 'rgba(214,228,240,.5)'; g.lineWidth = 1;
+    for (const gr of P.groups) { const a = a0 + acc / P.total * 6.2832; g.beginPath(); g.moveTo(GX + Math.cos(a) * (R - 6), GY + Math.sin(a) * (R - 6)); g.lineTo(GX + Math.cos(a) * (R + 6), GY + Math.sin(a) * (R + 6)); g.stroke(); acc += gr.total; }
+    const ae = a0 + fd * 6.2832; g.fillStyle = COL.done; g.shadowColor = COL.done; g.shadowBlur = 12; g.beginPath(); g.arc(GX + Math.cos(ae) * R, GY + Math.sin(ae) * R, 3.5, 0, 6.2832); g.fill(); g.shadowBlur = 0;
+    g.font = `700 11px ${getComputedStyle(document.body).fontFamily}`; g.textAlign = 'center'; g.fillStyle = COL.done;
+    g.fillText(`PLANO ${P.pct}%`, GX, GY - R - 12); g.font = `400 9px ${getComputedStyle(document.body).fontFamily}`; g.fillStyle = TH.lbl;
+    g.fillText(`${P.done}/${P.total} itens · ${P.running} em andamento`, GX, GY - R - 1); g.textAlign = 'left';
+  }
+  // mestre e tasks
+  const mv = vec(MASTER.lat, MASTER.lon), mp = rot(mv), ms = proj(mp);
+  HITS = [];
+  const tasks = globeTasks();
+  const labelQ = [];
+  for (const task of tasks) {
+    const v = VIS.get(task.id); if (!v) continue;
+    const col = stateCol(task), wcol = COL[task.worker] || COL['?'], tv = vec(v.lat, v.lon), tp = rot(tv), ts = proj(tp);
+    const run = task.state === 'running', focus = sel === task.id || hoverId === task.id, appear = expoOut(clamp((t - v.born) / 1.2));
+    // arco mestre → task
+    const A = arcPts(mv, tv), AP = A.map(rot), AS = AP.map(proj), n = Math.round((A.length - 1) * appear);
+    g.lineWidth = focus ? 2 : 1.2;
+    for (let i = 1; i <= n; i++) { if (!visible(AP[i]) || !visible(AP[i - 1])) continue; g.strokeStyle = col; g.globalAlpha = (run ? .55 : .25) * (focus ? 1.6 : 1); g.beginPath(); g.moveTo(AS[i - 1][0], AS[i - 1][1]); g.lineTo(AS[i][0], AS[i][1]); g.stroke(); }
+    g.globalAlpha = 1;
+    const pk = (u, c, a = 1) => { const i = Math.min(A.length - 1, Math.floor(u * (A.length - 1))); if (!visible(AP[i])) return; const s = AS[i]; g.shadowColor = c; g.shadowBlur = 12; g.fillStyle = c; g.globalAlpha = a; g.fillRect(s[0] - 2.5, s[1] - 2.5, 5, 5); g.globalAlpha = 1; g.shadowBlur = 0; };
+    if (run && appear >= 1) { for (let k = 0; k < 3; k++) pk((t * .4 + hash(task.id) + k / 3) % 1, COL.claude, .9); v.back = v.back.filter(b => t - b < 1.2); for (const b of v.back) pk(1 - expoOut((t - b) / 1.2), wcol, 1 - (t - b) / 1.2); }
+    if (v.endT && t - v.endT < 1.5) pk(1 - expoOut((t - v.endT) / 1.5), col);
+    // o ponto: farol, anel no chão, espinho
+    if (tp[2] > 1 / D) {
+      const front = clamp((tp[2] - 1 / D) * 2.2);
+      const spikeTop = proj(rot(tv.map(c => c * (1 + (run ? .16 + .03 * Math.sin(t * 3 + hash(task.id) * 9) : .1)))));
+      g.strokeStyle = col; g.globalAlpha = front; g.lineWidth = 1.5; g.beginPath(); g.moveTo(ts[0], ts[1]); g.lineTo(spikeTop[0], spikeTop[1]); g.stroke();
+      // anel tangente no chão
+      const ringR = .05 + (run ? .04 * ((t * .8 + hash(task.id)) % 1) : 0), e1 = Math.abs(tv[1]) < .9 ? norm(cross3(tv, [0, 1, 0])) : [1, 0, 0], e2 = cross3(tv, e1);
+      for (const [rr, a] of run ? [[ringR, 1 - (ringR - .05) / .04], [.035, 1]] : [[.035, 1]]) {
+        g.globalAlpha = front * a * .9; g.beginPath();
+        for (let k = 0; k <= 32; k++) { const ang = k / 32 * 6.2832, q = norm(tv.map((c, j) => c + (e1[j] * Math.cos(ang) + e2[j] * Math.sin(ang)) * rr)), s = proj(rot(q)); k ? g.lineTo(s[0], s[1]) : g.moveTo(s[0], s[1]); }
+        g.stroke();
+      }
+      const kick = clamp(1 - (t - v.kick) / .6);
+      const al = alertOf(task);
+      g.globalAlpha = front * (al ? .55 + .45 * Math.sin(t * 10) : 1); g.shadowColor = col; g.shadowBlur = 14 + kick * 18 + (al ? 14 : 0); g.fillStyle = col;
+      g.beginPath(); g.arc(spikeTop[0], spikeTop[1], (focus ? 5 : 3.5) + kick * 2 + (al ? 1.5 : 0), 0, 6.2832); g.fill(); g.shadowBlur = 0; g.globalAlpha = 1;
+      if (al) {   // alerta: ondas de choque e um "!" piscando
+        for (let k = 0; k < 2; k++) { const pr = (t * 1.1 + k / 2 + hash(task.id)) % 1; g.strokeStyle = col; g.lineWidth = 2; g.globalAlpha = front * (1 - pr); g.beginPath(); g.arc(spikeTop[0], spikeTop[1], 8 + pr * 28, 0, 6.2832); g.stroke(); }
+        g.globalAlpha = front * (.5 + .5 * Math.sin(t * 10)); g.fillStyle = col; g.font = `700 14px ${getComputedStyle(document.body).fontFamily}`; g.textAlign = 'center'; g.fillText('!', spikeTop[0], spikeTop[1] - 12); g.textAlign = 'left'; g.globalAlpha = 1;
+      }
+      HITS.push({ id: task.id, x: spikeTop[0], y: spikeTop[1] }, { id: task.id, x: ts[0], y: ts[1] });
+      labelQ.push({ task, x: spikeTop[0], y: spikeTop[1], col, wcol, focus, front });
+      if (focus) { const r = 16 + 2 * Math.sin(t * 6); g.strokeStyle = COL.ui; g.lineWidth = 1.5; for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { g.beginPath(); g.moveTo(spikeTop[0] + sx * r, spikeTop[1] + sy * (r - 6)); g.lineTo(spikeTop[0] + sx * r, spikeTop[1] + sy * r); g.lineTo(spikeTop[0] + sx * (r - 6), spikeTop[1] + sy * r); g.stroke(); } }
+    }
+  }
+  // mestre por cima dos arcos
+  if (mp[2] > 1 / D) {
+    const mk = clamp(1 - (t - masterKick) / 1.2), top = proj(rot(mv.map(c => c * 1.22)));
+    g.strokeStyle = COL.claude; g.lineWidth = 2; g.beginPath(); g.moveTo(ms[0], ms[1]); g.lineTo(top[0], top[1]); g.stroke();
+    const pr = (t % 2) / 2; g.globalAlpha = 1 - pr; g.beginPath(); g.arc(ms[0], ms[1], 6 + pr * 30, 0, 6.2832); g.stroke(); g.globalAlpha = 1;
+    g.shadowColor = COL.claude; g.shadowBlur = 24 + mk * 30; g.fillStyle = COL.claude; g.beginPath(); g.arc(top[0], top[1], 7 + mk * 4, 0, 6.2832); g.fill(); g.shadowBlur = 0;
+    labelQ.push({ master: true, x: top[0], y: top[1] });
+  }
+  // rótulos
+  for (const L of labelQ) {
+    g.font = `700 11px ${getComputedStyle(document.body).fontFamily}`; g.textAlign = 'left';
+    // rótulo vira para a esquerda quando não cabe na tela
+    if (L.master) { const s = 'CLAUDE · MASTER', fl = L.x + 12 + g.measureText(s).width > LBLR; g.fillStyle = COL.claude; g.textAlign = fl ? 'right' : 'left'; g.fillText(s, fl ? L.x - 12 : L.x + 12, L.y - 8); g.textAlign = 'left'; continue; }
+    if (!L.focus && L.front < .35) continue;
+    const t2 = L.task; g.globalAlpha = L.focus ? 1 : .55 + .45 * L.front;
+    const l1 = NAME[t2.worker] || t2.worker, l2 = `${t2.id} · ${tagOf(t2)}${t2.state === 'running' ? ' ' + clock(now - (t2.started || now)) : ''}`;
+    const w1 = g.measureText(l1).width; g.font = `400 10px ${getComputedStyle(document.body).fontFamily}`;
+    const fl = L.x + 26 + Math.max(w1, g.measureText(l2).width) > LBLR, sx = fl ? -1 : 1;
+    g.strokeStyle = L.col; g.lineWidth = 1; g.beginPath(); g.moveTo(L.x + 5 * sx, L.y - 5); g.lineTo(L.x + 16 * sx, L.y - 16); g.lineTo(L.x + 22 * sx, L.y - 16); g.stroke();
+    g.textAlign = fl ? 'right' : 'left';
+    g.font = `700 11px ${getComputedStyle(document.body).fontFamily}`; g.fillStyle = L.wcol; g.fillText(l1, L.x + 26 * sx, L.y - 12);
+    g.font = `400 10px ${getComputedStyle(document.body).fontFamily}`; g.fillStyle = TH.lbl;
+    g.fillText(l2, L.x + 26 * sx, L.y + 1); g.globalAlpha = 1; g.textAlign = 'left';
+  }
+  // cabeçalho
+  const live = nowP - lastOk < 6000; $('live').classList.toggle('off', !live || REPLAY != null); $('live').lastChild.textContent = REPLAY != null ? 'REPLAY ' + hm(REPLAY) : live ? 'LIVE' : 'OFFLINE';
+  const d = new Date(now); $('clock').textContent = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+  drawBeats(t); drawLanes(nowL());
+  requestAnimationFrame(frame);
+}
+// ══════════ raias: linha do tempo de cada worker (uma barra por rodada; ↻ = rodada de correção) ══════════
+const LANES = [['API', 'codex'], ['WEB', 'agy'], ['WEB 2', 'agy2'], ['MESTRE', 'claude']];
+let LHITS = [];
+function drawLanes(now) {
+  const c = $('lanescv'), w = c.clientWidth, h = c.clientHeight; if (!w || !h) return;
+  if (c.width !== Math.round(w * DPR) || c.height !== Math.round(h * DPR)) { c.width = Math.round(w * DPR); c.height = Math.round(h * DPR); }
+  const x = c.getContext('2d'), font = getComputedStyle(document.body).fontFamily; x.setTransform(DPR, 0, 0, DPR, 0, 0); x.clearRect(0, 0, w, h);
+  const runs = []; for (const t of STATE.tasks) (t.runs || []).forEach((r, i) => runs.push({ t, i, last: i === t.runs.length - 1, s: r.start, e: r.end || now, open: !r.end, worker: r.worker, tokens: r.tokens }));
+  const lx = 58, top = 16, lh = 20, gap = 4, axisY = top + LANES.length * (lh + gap) + 2;
+  x.font = `700 9px ${font}`; x.fillStyle = 'rgba(91,112,131,.9)'; x.fillText('RAIAS', 8, 11);
+  LHITS = [];
+  if (!runs.length) { x.fillStyle = 'rgba(91,112,131,.9)'; x.fillText('nenhuma rodada ainda', lx, top + 12); return; }
+  const etaMax = Math.max(0, ...STATE.tasks.map(t => { const e = etaOf(t); return e ? e.end : 0; })), t1 = Math.max(now + 60e3, etaMax + 3 * 60e3), t0 = Math.min(now - 30 * 60e3, Math.min(...runs.map(r => r.s)) - 5 * 60e3), X = ts => lx + (ts - t0) / (t1 - t0) * (w - lx - 8);
+  // eixo de horas
+  const span = t1 - t0, step = [5, 10, 15, 30, 60, 120].map(m => m * 60e3).find(s => span / s < 9) || 240 * 60e3;
+  x.font = `400 9px ${font}`; x.strokeStyle = 'rgba(56,189,248,.08)'; x.lineWidth = 1;
+  for (let tk = Math.ceil(t0 / step) * step; tk < t1; tk += step) { const px = Math.round(X(tk)) + .5, d = new Date(tk); x.beginPath(); x.moveTo(px, top - 2); x.lineTo(px, axisY); x.stroke(); x.fillStyle = 'rgba(91,112,131,.9)'; x.fillText(`${pad2(d.getHours())}:${pad2(d.getMinutes())}`, px - 13, axisY + 11); }
+  // ondas: despachos com mais de 15 min de intervalo começam uma onda nova
+  LX = { lx, t0, t1, w, axisY };
+  const waves = wavesOf(STATE.tasks);
+  x.setLineDash([3, 4]); x.strokeStyle = 'rgba(255,138,76,.35)';
+  waves.forEach((wv, i) => { const px = Math.round(X(wv.s)) + .5; x.beginPath(); x.moveTo(px, top - 4); x.lineTo(px, axisY); x.stroke(); x.fillStyle = 'rgba(255,138,76,.8)'; x.font = `700 9px ${font}`; x.fillText('ONDA ' + (i + 1), px + 3, 11); });
+  x.setLineDash([]);
+  LANES.forEach(([label, wk], li) => {
+    const y = top + li * (lh + gap);
+    x.fillStyle = 'rgba(56,189,248,.04)'; x.fillRect(lx, y, w - lx - 8, lh);
+    x.font = `700 9px ${font}`; x.fillStyle = COL[wk]; x.fillText(label, 8, y + 13);
+    let items;
+    if (wk === 'claude') {   // mestre: o tempo entre o fim de uma rodada e o -Continue seguinte (revisão e correções)
+      items = []; for (const t of STATE.tasks) for (let i = 0; i + 1 < (t.runs || []).length; i++) if (t.runs[i].end) items.push({ t, s: t.runs[i].end, e: t.runs[i + 1].start, review: true });
+      for (const t of STATE.tasks) for (const m of (t.master && t.master.sessions) || []) items.push({ t, s: m.s, e: m.e, review: true, edit: true });
+    } else items = runs.filter(r => r.worker === wk);
+    // rodadas que se sobrepõem na mesma raia viram sub-faixas
+    const rows = []; items.sort((a, b) => a.s - b.s);
+    for (const it of items) { let k = rows.findIndex(end => end <= it.s); if (k < 0) { k = rows.length; rows.push(0); } rows[k] = it.e; it.row = k; }
+    const nr = Math.max(1, rows.length), sh = (lh - 2) / nr;
+    for (const it of items) {
+      const x0 = X(it.s), x1 = Math.max(x0 + 3, X(it.e)), yy = y + 1 + it.row * sh, col = it.review ? COL.claude : it.last && !it.open ? stateCol(it.t) : COL[it.worker] || COL['?'];
+      const on = sel === it.t.id || hoverId === it.t.id;
+      x.globalAlpha = it.edit ? (on ? 1 : .9) : it.review ? .45 : on ? 1 : .75; x.fillStyle = col; x.fillRect(x0, yy, x1 - x0, sh - 1);
+      if (it.open) { x.globalAlpha = .5 + .5 * Math.sin(performance.now() / 200); x.fillRect(x1 - 2, yy, 2, sh - 1); }
+      if (it.open && !it.review) { const e = etaOf(it.t); if (e && e.end > now) { x.globalAlpha = .75; x.setLineDash([3, 3]); x.strokeStyle = col; x.lineWidth = 1; x.strokeRect(x1 + .5, yy + .5, X(e.end) - x1 - 1, sh - 2); x.setLineDash([]); x.fillStyle = col; x.font = `400 8px ${font}`; if (X(e.end) - x1 > 34) x.fillText(etaTxt(e), x1 + 4, yy + sh - 3); } }
+      x.globalAlpha = 1;
+      if (on) { x.strokeStyle = '#fff'; x.lineWidth = 1; x.strokeRect(x0 - .5, yy - .5, x1 - x0 + 1, sh); }
+      if (it.i > 0 && x1 - x0 > 10) { x.fillStyle = '#03060a'; x.font = `700 ${Math.min(10, sh)}px ${font}`; x.fillText('↻', x0 + 2, yy + sh - 2); }
+      if (!it.review && x1 - x0 > 60 && sh >= 9) { x.fillStyle = '#03060a'; x.font = `700 ${Math.min(9, sh - 1)}px ${font}`; x.fillText(it.t.id.replace(/^WEBIMPL-/, ''), x0 + (it.i > 0 ? 12 : 3), yy + sh - 2.5); }
+      LHITS.push({ x0, x1, y0: yy, y1: yy + sh, it });
+    }
+  });
+  const nx = Math.round(X(now)) + .5; x.strokeStyle = COL.ui; x.lineWidth = 1; x.beginPath(); x.moveTo(nx, top - 4); x.lineTo(nx, axisY); x.stroke();
+  x.fillStyle = COL.ui; x.font = `700 9px ${font}`; x.fillText('AGORA', Math.min(nx + 3, w - 36), axisY + 11);
+  if (REPLAY != null) {   // replay: o futuro fica apagado e uma agulha marca a hora vista
+    const rx = Math.round(X(REPLAY)) + .5; x.fillStyle = TH.light ? 'rgba(233,240,246,.6)' : 'rgba(3,6,10,.55)'; x.fillRect(rx, top - 4, Math.max(0, nx - rx), axisY - top + 4);
+    x.strokeStyle = COL.warn; x.lineWidth = 2; x.beginPath(); x.moveTo(rx, 2); x.lineTo(rx, axisY + 2); x.stroke();
+    x.fillStyle = COL.warn; x.font = `700 9px ${font}`; x.fillText(hm(REPLAY), Math.min(rx + 4, w - 40), axisY + 11);
+  }
+}
+function laneHit(e) { const r = $('lanescv').getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top; return LHITS.find(hh => px >= hh.x0 - 2 && px <= hh.x1 + 2 && py >= hh.y0 - 1 && py <= hh.y1 + 1); }
+let scrubbing = false;
+const scrubX = e => { const r = $('lanescv').getBoundingClientRect(), px = e.clientX - r.left; return LX.t0 + (px - LX.lx) / (LX.w - LX.lx - 8) * (LX.t1 - LX.t0); };
+$('lanescv').addEventListener('pointerdown', e => {
+  const r = $('lanescv').getBoundingClientRect();
+  if (LX && e.clientY - r.top >= LX.axisY - 2) { scrubbing = true; $('lanescv').setPointerCapture(e.pointerId); RPLAY = false; scrubTo(scrubX(e)); return; }   // arrastar no eixo das horas = replay
+  const hh = laneHit(e); if (hh) select(hh.it.t.id);
+});
+$('lanescv').addEventListener('pointerup', () => { scrubbing = false; });
+$('lanescv').addEventListener('pointermove', e => {
+  if (scrubbing) { scrubTo(scrubX(e)); return; }
+  const hh = laneHit(e), tip = $('tip'); hoverId = hh ? hh.it.t.id : null; if (!hh) { tip.style.display = 'none'; return; }
+  const it = hh.it, d = (it.e - it.s);
+  tip.style.display = 'block'; tip.style.left = Math.min(e.clientX + 14, innerWidth - 300) + 'px'; tip.style.top = e.clientY - 60 + 'px';
+  tip.innerHTML = it.review ? `<b style="color:var(--claude)">MESTRE</b> ${it.edit ? 'editou arquivos de' : 'revisão e correções de'} ${esc(it.t.id)}<br><span style="color:var(--mute)">${clock(d)}</span>`
+    : `<b style="color:${COL[it.worker] || '#fff'}">${NAME[it.worker] || it.worker}</b> ${esc(it.t.id)} · rodada ${it.i + 1}${it.i ? ' (correção)' : ''}<br><span style="color:var(--mute)">${clock(d)}${it.open ? ' e contando' : ''}${it.tokens ? ' · ' + fmtTok(it.tokens) + ' tokens' : ''}${it.open && etaOf(it.t) ? ' · previsão ' + hm(etaOf(it.t).end) + ' (' + etaTxt(etaOf(it.t)) + ')' : ''}</span>`;
+});
+$('lanescv').addEventListener('pointerleave', () => { hoverId = null; $('tip').style.display = 'none'; });
+// ══════════ ondas de I/O (osciloscópio) ══════════
+function drawHB(c, t) {
+  const v = VIS.get(c.dataset.id), task = v && v.task; if (!task) return;
+  const w = c.clientWidth, h = c.clientHeight; if (!w || !h) return;
+  if (c.width !== Math.round(w * DPR) || c.height !== Math.round(h * DPR)) { c.width = Math.round(w * DPR); c.height = Math.round(h * DPR); }
+  const x = c.getContext('2d'); x.setTransform(DPR, 0, 0, DPR, 0, 0); x.clearRect(0, 0, w, h);
+  const run = task.state === 'running', col = stateCol(task), span = +c.dataset.span, big = !!c.dataset.big, mid = h / 2;
+  // grade de monitor que rola junto com o sinal
+  x.strokeStyle = 'rgba(56,189,248,.08)'; x.lineWidth = 1;
+  const gs = big ? 12 : 8; for (let gx = w - ((t * w / span) % gs); gx > 0; gx -= gs) { x.beginPath(); x.moveTo(gx + .5, 0); x.lineTo(gx + .5, h); x.stroke(); }
+  x.beginPath(); x.moveTo(0, h / 2 + .5); x.lineTo(w, h / 2 + .5); x.stroke();
+  if (big) for (let gy = 0; gy < h; gy += gs) { x.beginPath(); x.moveTo(0, gy + .5); x.lineTo(w, gy + .5); x.stroke(); }
+  // onda de osciloscópio: cada evento real (bytes de log, arquivos) abre uma rajada que decai; por baixo, uma
+  // portadora fraca que só vibra enquanto o worker trabalha
+  const N = Math.max(80, Math.round(w / 2)), pts = [], t0 = t - span, fb = 6.2832 * 14 / span, f1 = 6.2832 * 6 / span, f2 = 6.2832 * 15 / span;
+  for (let k = 0; k <= N; k++) {
+    const tt = t0 + span * k / N;
+    let a = 0; for (const hh of v.hist) { const d = tt - hh.t; if (d >= 0 && d < span / 6) a = Math.max(a, hh.a * Math.exp(-d * 9 / span)); }
+    const carrier = run ? .18 * Math.sin(tt * f1 + v.seed * 20) + .09 * Math.sin(tt * f2 + v.seed * 5) : 0;
+    const y = (a * Math.sin(tt * fb + v.seed * 3) + carrier) * (run || a > 0 ? 1 : 0);
+    pts.push([w * k / N, mid - y * (h / 2 - 3)]);
+  }
+  x.lineJoin = 'round'; x.lineWidth = big ? 1.6 : 1.3; x.shadowColor = col; x.shadowBlur = run ? 6 : 0; x.strokeStyle = col;
+  for (let k = 1; k < pts.length; k++) { x.globalAlpha = .15 + .85 * (k / pts.length) ** 1.4; x.beginPath(); x.moveTo(...pts[k - 1]); x.lineTo(...pts[k]); x.stroke(); }
+  x.globalAlpha = 1; x.shadowBlur = 0;
+  const e = pts[pts.length - 1]; x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 10; x.fillRect(Math.min(e[0], w - 4) - 2, e[1] - 2, 4, 4); x.shadowBlur = 0;
+  if (big) { x.font = `700 9px ${getComputedStyle(document.body).fontFamily}`; x.fillStyle = 'rgba(91,112,131,.9)'; x.fillText(run ? 'I/O · LOG + ARQUIVOS' : task.state === 'done' ? 'ENCERRADA' : task.state === 'failed' ? 'FALHOU' : 'SEM SINAL', 4, 10); }
+}
+// CPU do worker (o processo e todos os filhos: testes, build, shell) nos últimos 2 min
+function drawCpu(c, t) {
+  const v = VIS.get(c.dataset.id), task = v && v.task; if (!task) return;
+  const w = c.clientWidth, h = c.clientHeight; if (!w || !h) return;
+  if (c.width !== Math.round(w * DPR) || c.height !== Math.round(h * DPR)) { c.width = Math.round(w * DPR); c.height = Math.round(h * DPR); }
+  const x = c.getContext('2d'), span = 120, font = getComputedStyle(document.body).fontFamily; x.setTransform(DPR, 0, 0, DPR, 0, 0); x.clearRect(0, 0, w, h);
+  x.strokeStyle = 'rgba(56,189,248,.08)'; x.lineWidth = 1; for (const f of [.25, .5, .75]) { x.beginPath(); x.moveTo(0, Math.round(h * f) + .5); x.lineTo(w, Math.round(h * f) + .5); x.stroke(); }
+  const pts = v.cpu.filter(p => p.c != null).map(p => [w - (t - p.t) / span * w, h - 2 - clamp(p.c / 100) * (h - 4)]);
+  const col = '#22d3ee';
+  if (pts.length > 1) {
+    const grd = x.createLinearGradient(0, 0, 0, h); grd.addColorStop(0, 'rgba(34,211,238,.35)'); grd.addColorStop(1, 'rgba(34,211,238,0)');
+    x.beginPath(); x.moveTo(pts[0][0], h); for (const p of pts) x.lineTo(p[0], p[1]); x.lineTo(pts[pts.length - 1][0], h); x.closePath(); x.fillStyle = grd; x.fill();
+    x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])); x.strokeStyle = col; x.lineWidth = 1.4; x.shadowColor = col; x.shadowBlur = 6; x.stroke(); x.shadowBlur = 0;
+  }
+  const p = task.proc;
+  x.font = `700 9px ${font}`; x.fillStyle = 'rgba(91,112,131,.9)';
+  x.fillText(p ? `CPU ${p.cpu.toFixed(1)}% DA MÁQUINA · MEM ${gb(p.mem)} GB · ${p.n} PROCESSOS${p.wsl ? ' · agy2 roda na VM do WSL: CPU dele não aparece aqui' : ''}` : task.state === 'running' ? 'CPU · procurando o processo do worker…' : 'CPU · processo encerrado', 4, 10);
+}
+function drawBeats(t) {
+  for (const c of document.querySelectorAll('canvas.hb')) drawHB(c, t);
+  for (const c of document.querySelectorAll('canvas.cpu')) drawCpu(c, t);
+  for (const b of document.querySelectorAll('.bpm')) { const v = VIS.get(b.dataset.id); if (v && v.task) { const recent = v.hist.filter(hh => t - hh.t < 10).length; b.textContent = v.task.state === 'running' ? recent + ' ev/10s' : '--'; } }
+}
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = a => { const l = Math.hypot(...a) || 1; return a.map(c => c / l); };
+
+// ══════════ painéis ══════════
+function renderList() {
+  const now = nowV(), V = VIEW(), L = shown(V), c = s => V.filter(x => x.state === s).length;
+  $('stats').textContent = `RUN ${pad2(c('running'))}  DONE ${pad2(c('done'))}  FAIL ${pad2(c('failed'))}  IDLE ${pad2(c('stalled'))}`;
+  // carga da máquina: CPU e memória do sistema e workers rodando contra o limite de 3
+  const sy = STATE.sys || {}, run = c('running'), max = sy.maxWorkers || 3, mp = sy.memTotal ? sy.memUsed / sy.memTotal : 0;
+  const gauge = (lbl, frac, val, col) => `<span class="gauge">${lbl}<span class="gb"><i style="width:${Math.round(clamp(frac) * 100)}%;background:${col}"></i></span><b style="color:${col}">${val}</b></span>`;
+  const heat = f => f > .9 ? COL.fail : f > .75 ? COL.warn : COL.ui;
+  $('sys').innerHTML = (sy.cpu != null ? gauge('CPU', sy.cpu / 100, Math.round(sy.cpu) + '%', heat(sy.cpu / 100)) : '') +
+    (sy.memTotal && sy.memUsed != null ? gauge('MEM', mp, innerWidth > 1280 ? `${gb(sy.memUsed)}/${gb(sy.memTotal)} GB` : Math.round(mp * 100) + '%', heat(mp)) : '') +
+    gauge('WORKERS', run / max, `${run}/${max}`, run > max ? COL.fail : run === max ? COL.warn : COL.done) +
+    (STATE.plan && STATE.plan.found ? `<span class="gauge" id="plang" style="pointer-events:auto;cursor:pointer" title="${STATE.plan.done} de ${STATE.plan.total} itens do plano concluídos · clique para ver">PLANO<span class="gb" style="width:80px"><i style="width:${Math.round(100 * STATE.plan.done / STATE.plan.total)}%;background:${COL.done}"></i><i style="left:${100 * STATE.plan.done / STATE.plan.total}%;width:${100 * STATE.plan.partial / 2 / STATE.plan.total}%;background:rgba(52,211,153,.45)"></i><i style="left:${100 * (STATE.plan.done + STATE.plan.partial / 2) / STATE.plan.total}%;width:${100 * STATE.plan.running / STATE.plan.total}%;background:${COL.ui}"></i></span><b style="color:${COL.done}">${STATE.plan.pct}%</b></span>` : '');
+  $('ncount').textContent = L.length === V.length ? V.length : `${L.length}/${V.length}`;
+  $('chips').innerHTML = FILTERS.map(([k, lbl, fn]) => { const n = V.filter(t => fn(t) && matchQ(t)).length; return n || k === FILT || k === 'all' ? `<button class="chip${FILT === k ? ' on' : ''}" data-f="${k}">${lbl}<b>${n}</b></button>` : ''; }).join('');
+  $('items').innerHTML = L.map(t => {
+    const eta = etaOf(t);
+    const col = stateCol(t), wc = COL[t.worker] || COL['?'], tm = t.state === 'running' ? clock(now - (t.started || now)) : t.finished && t.started ? clock(t.finished - t.started) : ago(now - t.lastActivity);
+    return `<div class="it${sel === t.id ? ' sel' : ''}" data-id="${esc(t.id)}" title="${esc(t.id)} · ${esc(t.title || '')}"><i class="d" style="background:${col};box-shadow:0 0 8px ${col}"></i>
+      <span class="w" style="color:${wc}">${NAME[t.worker] || t.worker}</span><span class="tag" style="color:${col}">${tagOf(t)}${eta ? ` <span style="font-weight:400;color:${eta.left < 0 ? COL.warn : 'var(--mute)'}" title="previsão pelo tempo mediano das rodadas do worker">${etaTxt(eta)}</span>` : ''}</span>
+      <span class="id">${esc(t.id)} · ${esc(t.title || '')}</span><span class="tm">${tm}</span>
+      <canvas class="hb" data-id="${esc(t.id)}" data-span="30"></canvas></div>`;
+  }).join('') || `<div style="padding:12px;color:var(--mute)">${V.length ? 'nenhuma task neste filtro' : REPLAY != null ? 'nenhuma task nesta hora' : 'nenhum worker ativo'}</div>`;
+}
+$('sys').addEventListener('click', e => { if (e.target.closest('#plang')) { select(null); mtab = 'plano'; $('out').dataset.src = ''; renderMeta(); renderMaster(); $('out').scrollTop = 0; } });
+$('chips').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) setFilter(b.dataset.f); });
+$('q').addEventListener('input', e => { Q = e.target.value.trim(); renderList(); if (!sel) renderMaster(); });
+function setFilter(k) { FILT = k; try { localStorage.setItem('orq-filtro', k); } catch { } renderList(); if (!sel) renderMaster(); }
+$('items').addEventListener('pointerdown', e => { const it = e.target.closest('.it'); if (it) select(it.dataset.id === sel ? null : it.dataset.id); });
+$('items').addEventListener('mouseover', e => { const it = e.target.closest('.it'); hoverId = it ? it.dataset.id : null; });
+$('items').addEventListener('mouseleave', () => { hoverId = null; });
+
+let CMP = null, CMPD = null, CMPTXT = null, CMPV = 'inter';
+let tab = 'log', mtab = 'feed', follow = true, logTimer = null, LOG = null, DIFF = null, DIFFTXT = null, diffFile = null, diffTimer = null;
+function select(id) {
+  sel = id || null; LOG = null; DIFF = null; DIFFTXT = null; diffFile = null; tab = 'log'; CMP = null; CMPD = null; CMPTXT = null; renderList(); renderMeta();
+  clearTimeout(logTimer); clearTimeout(diffTimer);
+  if (sel && narrow()) $('term').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (sel) { focusOn(sel); $('out').dataset.src = ''; $('out').innerHTML = '<span style="color:var(--mute)">conectando ao log…</span>'; pullLog(); } else renderMaster();
+}
+function renderMaster() { mtab === 'metricas' ? renderMetrics() : mtab === 'plano' ? renderPlan() : renderFeed(); }
+// aba PLANO: progresso do Plano de Implementação por fase, item a item, com o merge que comprova cada um
+const PST = { done: ['✓', '#34d399', 'concluído'], partial: ['◐', '#6ee7b7', 'parcial'], running: ['▶', '#38bdf8', 'em andamento'], todo: ['·', '#5b7083', 'a fazer'] };
+function renderPlan() {
+  const out = $('out'), p = STATE.plan;
+  let html;
+  if (!p || !p.found) html = `<p style="color:var(--mute)">plano não encontrado${p ? ': ' + esc(p.file) : ''}. Passe <code>--plan &lt;arquivo.md&gt;</code> ao servidor.</p>`;
+  else {
+    const bar = (d, pa, r, tot, h = 8) => `<div style="display:flex;height:${h}px;background:var(--faint);margin:4px 0 2px">${[[d, '#34d399'], [pa / 2, 'rgba(52,211,153,.45)'], [r, '#38bdf8']].map(([v, c]) => `<i style="width:${100 * v / tot}%;background:${c}"></i>`).join('')}</div>`;
+    html = `<h1>${esc(p.title)}</h1>
+      <div style="display:flex;align-items:baseline;gap:14px"><b style="font-size:34px;color:var(--done);letter-spacing:-.02em;white-space:nowrap">${p.pct}%</b><span style="color:var(--mute)">${p.done} de ${p.total} itens concluídos · ${p.partial} parciais (contam meio) · ${p.running} em andamento · ${p.todo} a fazer</span></div>
+      ${bar(p.done, p.partial, p.running, p.total, 10)}
+      <p style="color:var(--mute);font-size:11px">Concluído = merge <code>WEBIMPL-&lt;ID&gt;</code> na develop ou item riscado/"integrada"/"Feito" no plano. Parcial = merge de parte do item (ex.: GEO2r) ou commit que cita o ID. Tarefa do mestre sem merge e sem marca no plano conta como a fazer: risque no plano o que já foi feito.</p>
+      ${p.groups.map(g => `<h2>${esc(g.name)} <span style="color:var(--mute);font-weight:400;letter-spacing:0;text-transform:none">${g.done}/${g.total}</span></h2>
+        ${bar(g.done, g.items.filter(i => i.status === 'partial').length, g.items.filter(i => i.status === 'running').length, g.total, 4)}
+        <div class="tw"><table><tbody>${g.items.map(i => { const s = PST[i.status];
+          return `<tr><td style="color:${s[1]};width:22px;text-align:center;font-weight:700" title="${s[2]}">${s[0]}</td><td style="white-space:nowrap;color:${i.status === 'todo' ? 'var(--mute)' : '#fff'}">${esc(i.id)}</td><td style="white-space:normal;color:${i.status === 'done' ? 'var(--mute)' : 'var(--text)'}">${esc(i.title)}</td><td style="color:var(--mute);font-size:10.5px;white-space:nowrap">${i.evidence.length ? esc(i.evidence[0]) + (i.evidence.length > 1 ? ' +' + (i.evidence.length - 1) : '') : i.source || ''}</td></tr>`; }).join('')}</tbody></table></div>`).join('')}`;
+  }
+  out.classList.add('md');
+  if (out.dataset.src === html) return; out.dataset.src = html;
+  const keep = out.scrollTop; out.innerHTML = html; out.scrollTop = keep;
+}
+function renderMeta() {
+  const meta = $('meta'), tabs = $('tabs');
+  if (!sel) {
+    meta.innerHTML = `<div class="t1"><b style="color:var(--claude)">CLAUDE</b><span style="color:var(--mute)">MASTER NODE · LIVE FEED DE TODAS AS IAS</span></div><div class="t2">clique num ponto do globo, numa task ou numa barra das raias para abrir a tarefa</div>`;
+    tabs.innerHTML = ['feed', 'plano', 'metricas'].map(k => `<button data-tab="${k}" class="${mtab === k ? 'on' : ''}">${k === 'metricas' ? 'MÉTRICAS' : k === 'plano' ? 'PLANO' + (STATE.plan && STATE.plan.found ? ` <span style="color:var(--done)">${STATE.plan.pct}%</span>` : '') : 'FEED'}</button>`).join('');
+    $('follow').style.display = 'none'; return;
+  }
+  const t = VIEW().find(x => x.id === sel) || STATE.tasks.find(x => x.id === sel); if (!t) { select(null); return; }
+  const eta = etaOf(t);
+  const now = nowV(), col = stateCol(t), lastEdit = t.files.length ? Math.max(...t.files.map(f => f.mtime)) : 0;
+  meta.innerHTML = `<div class="t1"><b style="color:${COL[t.worker] || '#fff'}">${NAME[t.worker] || t.worker}</b><span>${esc(t.id)}</span><span style="color:${col};font-weight:700;margin-left:auto">[ ${tagOf(t)} ${t.state === 'running' ? clock(now - (t.started || now)) : ''} ]</span></div>
+    <div class="t2">${esc(t.title || '')} · ${esc(t.repo)}</div>
+    <div class="t3"><span>FILES<b>${t.files.length}</b></span>${t.master && t.master.files ? `<span>CLAUDE<b style="color:var(--claude)">${t.master.files}</b></span>` : ''}<span>LOG<b>${bytes(t.logBytes)}</b></span><span>EDIT<b>${lastEdit ? ago(now - lastEdit) : '--'}</b></span><span>REPORT<b>${t.report ? 'SIM' : 'NÃO'}</b></span><span style="margin-left:auto">I/O<b class="bpm" data-id="${esc(t.id)}">--</b></span></div>
+    <div class="t4"><span>ESCOPO<b style="color:${oos(t) ? COL.fail : t.allowed.length ? COL.done : 'var(--mute)'}">${!t.allowed.length ? 'SEM LISTA' : oos(t) ? oos(t) + ' FORA' : 'OK'}</b></span><span>RODADAS<b>${t.runs.length}${t.runs.length > 1 ? ' (' + (t.runs.length - 1) + ' ↻)' : ''}</b></span><span>TRABALHO<b>${clock(workTime(t))}</b></span>${eta ? `<span title="mediana de ${eta.n} rodada(s) ${eta.corr ? 'de correção' : 'de 1ª tentativa'} do worker">PREVISÃO<b style="color:${eta.left < 0 ? COL.warn : 'var(--text)'}">${hm(eta.end)} · ${eta.left < 0 ? 'passou ' + ago(-eta.left) : 'faltam ~' + ago(eta.left)}</b></span>` : ''}${t.tokens ? `<span>CUSTO<b>${usd(t.tokens)}</b></span>` : ''}${t.tokens ? `<span>TOKENS<b>${fmtTok(t.tokens)}</b></span>` : ''}${t.reportStatus ? `<span>STATUS<b style="color:${/DECISION/i.test(t.reportStatus) ? COL.warn : /CONCLU/i.test(t.reportStatus) ? COL.done : COL.warn}">${esc(t.reportStatus.slice(0, 24))}</b></span>` : ''}</div>
+    ${oos(t) ? `<div class="warnbar" style="color:${COL.fail};border-color:${COL.fail}">✕ FORA DO ESCOPO: ${wOut(t).map(esc).join(', ')}</div>` : ''}
+    ${t.decision ? `<div class="warnbar" style="color:${COL.warn};border-color:${COL.warn}">⚠ DECISION REQUIRED: leve a pergunta ao usuário (aba REPORT)</div>` : ''}
+    ${t.integrated ? `<div style="margin-top:8px;color:${COL.done};font-size:11px">✓ INTEGRADA na develop (${esc(t.integrated.hash)})${/DECISION/i.test(t.reportStatus || '') ? ' · a decisão do REPORT foi resolvida pelo mestre' : ''}</div>` : t.decisionAnswered ? `<div style="margin-top:8px;color:${COL.done};font-size:11px">✓ DECISION REQUIRED respondida no TASK (Correções do revisor); aguardando a próxima rodada</div>` : ''}
+    <canvas class="hb" data-id="${esc(t.id)}" data-span="60" data-big="1"></canvas>
+    ${t.state === 'running' || t.proc ? `<canvas class="cpu" data-id="${esc(t.id)}"></canvas>` : ''}`;
+  tabs.innerHTML = ['log', 'task', 'diff', 'arquivos', ...(t.report ? ['report'] : [])].map(k => `<button data-tab="${k}" class="${tab === k ? 'on' : ''}">${k.toUpperCase()}${k === 'diff' && oos(t) ? ' <span style="color:var(--fail)">✕</span>' : ''}</button>`).join('') + '<button class="x" data-tab="close">✕ FECHAR</button>';
+  $('follow').style.display = tab === 'log' ? 'block' : 'none';
+}
+$('tabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (!sel) { mtab = b.dataset.tab; $('out').dataset.src = ''; renderMeta(); renderMaster(); $('out').scrollTop = 0; return; }
+  if (b.dataset.tab === 'close') return select(null);
+  tab = b.dataset.tab; $('out').dataset.src = ''; renderMeta(); paintOut();
+  if (tab === 'diff') { clearTimeout(diffTimer); pullDiff(); }
+  if (tab !== 'log') $('out').scrollTop = 0; else if (follow) $('out').scrollTop = 1e9;
+});
+async function pullDiff() {
+  if (!sel || tab !== 'diff') return; const id = sel, cmp = CMP, J = async u => (await fetch(u, { cache: 'no-store' })).json();
+  try {
+    const r = await J(`/api/diff?id=${encodeURIComponent(id)}`);
+    if (id !== sel) return; DIFF = r;
+    if (cmp) {   // rodada n → agora
+      const c = await J(`/api/compare?id=${encodeURIComponent(id)}&run=${cmp}`); if (id !== sel || cmp !== CMP) return; CMPD = c;
+      const lst = c.files || []; if (lst.length && !lst.some(f => f.file === diffFile)) diffFile = (lst.find(f => f.status === 'mudou') || lst[0]).file;
+      if (diffFile && c.found) { const d = await J(`/api/compare?id=${encodeURIComponent(id)}&run=${cmp}&file=${encodeURIComponent(diffFile)}`); if (id === sel && cmp === CMP) CMPTXT = d; }
+    } else if (r.files && r.files.length && !r.files.some(f => f.file === diffFile)) diffFile = r.files[r.files.length - 1].file;   // começa pelo último arquivo mexido
+    if (!cmp && diffFile) { const d = await J(`/api/diff?id=${encodeURIComponent(id)}&file=${encodeURIComponent(diffFile)}`); if (id === sel) DIFFTXT = d; }
+    if (tab === 'diff') paintOut();
+  } catch { }
+  if (id === sel && tab === 'diff') diffTimer = setTimeout(pullDiff, 4000);
+}
+$('follow').addEventListener('click', () => { follow = !follow; $('follow').classList.toggle('on', follow); if (follow) $('out').scrollTop = 1e9; });
+$('out').addEventListener('scroll', () => { const o = $('out'), atEnd = o.scrollHeight - o.scrollTop - o.clientHeight < 30; if (tab === 'log' && sel && follow !== atEnd) { follow = atEnd; $('follow').classList.toggle('on', follow); } });
+async function pullLog() {
+  if (!sel) return; const id = sel;
+  try { const r = await (await fetch(`/api/log?id=${encodeURIComponent(id)}&kb=64`, { cache: 'no-store' })).json(); if (id === sel) { LOG = r; paintOut(); } } catch { }
+  if (id === sel) logTimer = setTimeout(pullLog, 1500);
+}
+function colorLine(l, last) {
+  const e = esc(l);
+  if (/^(exec|codex|thinking|apply patch|file update:?|tokens used|user)$/.test(l.trim())) return `<span class="${l.trim() === 'codex' ? 'say' : l.trim() === 'thinking' ? 'th' : 'k'}">${e}</span>`;
+  if (/^\+(?!\+\+)/.test(l)) return `<span class="add">${e}</span>`;
+  if (/^-(?!--)/.test(l)) return `<span class="del">${e}</span>`;
+  return last ? `<span class="last">${e}</span>` : e;
+}
+// ══════════ markdown (o que os REPORTs usam: títulos, tabelas, listas, checkboxes, código, citações) ══════════
+function mdInline(t) {
+  const codes = []; t = t.replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
+  t = esc(t)
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => `<strong>${a || b}</strong>`)
+    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, l, u) => /^https?:/.test(u) ? `<a href="${u}" target="_blank" rel="noopener">${l}</a>` : `<span title="${u}" style="color:var(--ui)">${l}</span>`)
+    .replace(/\b(PASS|OK|CONCLU[IÍ]DO|SIM)\b/g, '<span class="pill" style="color:var(--done)">$1</span>')
+    .replace(/\b(FAIL|FALHOU|BLOQUEADO|REPROVADO\w*)\b/g, '<span class="pill" style="color:var(--fail)">$1</span>')
+    .replace(/\b(DECISION REQUIRED|PARCIAL|GATED|NOT RUN|SKIP)\b/g, '<span class="pill" style="color:#fbbf24">$1</span>');
+  return t.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[+i])}</code>`);
+}
+function md(src) {
+  const L = src.replace(/\r/g, '').split('\n'), out = []; let i = 0;
+  const cells = l => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map(c => c.trim());
+  while (i < L.length) {
+    const l = L[i];
+    if (/^```/.test(l)) { const buf = []; i++; while (i < L.length && !/^```/.test(L[i])) buf.push(L[i++]); i++; out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`); continue; }
+    const h = l.match(/^(#{1,4})\s+(.*)$/); if (h) { out.push(`<h${h[1].length}>${mdInline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\s*(---|\*\*\*|___)\s*$/.test(l)) { out.push('<hr>'); i++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(l) && i + 1 < L.length && /^\s*\|?\s*:?-{2,}/.test(L[i + 1])) {
+      const head = cells(l), al = cells(L[i + 1]).map(c => /^:-+:$/.test(c) ? 'center' : /-:$/.test(c) ? 'right' : 'left'); i += 2;
+      const rows = []; while (i < L.length && /^\s*\|.*\|\s*$/.test(L[i])) rows.push(cells(L[i++]));
+      out.push(`<div class="tw"><table><thead><tr>${head.map((c, k) => `<th style="text-align:${al[k] || 'left'}">${mdInline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${head.map((_, k) => `<td style="text-align:${al[k] || 'left'}">${mdInline(r[k] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*>/.test(l)) { const buf = []; while (i < L.length && /^\s*>/.test(L[i])) buf.push(L[i++].replace(/^\s*>\s?/, '')); out.push(`<blockquote>${md(buf.join('\n'))}</blockquote>`); continue; }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d/.test(l), items = [];
+      while (i < L.length && (/^\s*([-*+]|\d+[.)])\s+/.test(L[i]) || (/^\s{2,}\S/.test(L[i]) && items.length))) {
+        if (/^\s*([-*+]|\d+[.)])\s+/.test(L[i])) items.push(L[i].replace(/^\s*([-*+]|\d+[.)])\s+/, '')); else items[items.length - 1] += ' ' + L[i].trim();
+        i++;
+      }
+      out.push(`<${ordered ? 'ol' : 'ul'}>${items.map(it => { const cb = it.match(/^\[([ xX])\]\s*(.*)$/);
+        return cb ? `<li class="task"><span class="cb${cb[1] !== ' ' ? ' on' : ''}">${cb[1] !== ' ' ? '✓' : ''}</span>${mdInline(cb[2])}</li>` : `<li>${mdInline(it)}</li>`; }).join('')}</${ordered ? 'ol' : 'ul'}>`);
+      continue;
+    }
+    if (!l.trim()) { i++; continue; }
+    const buf = []; while (i < L.length && L[i].trim() && !/^(#{1,4}\s|```|\s*>|\s*([-*+]|\d+[.)])\s+|\s*\|.*\|\s*$)/.test(L[i])) buf.push(L[i++]);
+    if (!buf.length) buf.push(L[i++]);
+    out.push(`<p>${mdInline(buf.join(' '))}</p>`);
+  }
+  return out.join('');
+}
+
+const colorDiff = txt => (txt || '').split('\n').map(l => { const e = esc(l);
+  return /^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename )/.test(l) ? `<span class="dm">${e}</span>` : /^@@/.test(l) ? `<span class="dh">${e}</span>` : /^\+/.test(l) ? `<span class="dadd">${e}</span>` : /^-/.test(l) ? `<span class="ddel">${e}</span>` : e; }).join('\n');
+function paintOut() {
+  const out = $('out'), t = STATE.tasks.find(x => x.id === sel); if (!t) return;
+  let html;
+  if (tab === 'arquivos') html = (t.allowed.length ? `<span class="dm">permitidos: ${t.allowed.map(esc).join('  ')}</span>\n\n` : '<span class="dm">o TASK não tem "Arquivos permitidos": escopo não verificado</span>\n\n') +
+    (t.files.length ? t.files.slice().reverse().map(f => `<span class="${f.code === 'D' ? 'del' : 'add'}">${f.code.padEnd(2)}</span>  ${byTag(f)}${f.out && f.by !== 'claude' ? `<span style="color:var(--fail);font-weight:700">${esc(f.file)}  ✕ FORA DO ESCOPO</span>` : esc(f.file)}`).join('\n') : '<span style="color:var(--mute)">nenhum arquivo alterado ainda</span>');
+  else if (tab === 'report') html = LOG && LOG.report ? (t.reportFresh ? '' : '<blockquote>este REPORT é de uma rodada anterior; o worker ainda não escreveu o desta rodada</blockquote>') + md(LOG.report) : '<span style="color:var(--mute)">carregando o REPORT…</span>';
+  else if (tab === 'task') html = LOG ? critBlock(t) + md(LOG.task || '(sem TASK.md)') : '<span style="color:var(--mute)">carregando o TASK…</span>';
+  else if (tab === 'diff') {
+    const snaps = (DIFF && DIFF.snaps) || [];
+    const modes = `<div class="dmodes"><button class="dmode${!CMP ? ' on' : ''}" data-cmp="0">ATUAL × HEAD</button>${snaps.map(sn => `<button class="dmode${CMP === sn.run ? ' on' : ''}" data-cmp="${sn.run}" title="o que mudou desde o fim da rodada ${sn.run}">RODADA ${sn.run} → AGORA</button>`).join('')}${!snaps.length && t.runs.length ? '<span class="dm" style="font-size:10px;align-self:center">comparar rodadas: aparece quando uma rodada termina com o painel aberto</span>' : ''}</div>`;
+    const ord = { mudou: 0, novo: 1, revertido: 2, '?': 3, igual: 4 };
+    if (CMP) {
+      if (!CMPD) html = modes + '<span style="color:var(--mute)">comparando…</span>';
+      else if (!CMPD.found) html = modes + `<span style="color:var(--mute)">${esc(CMPD.error || 'sem foto desta rodada')}</span>`;
+      else html = modes + `<span class="dm">${CMPD.files.filter(f => f.status !== 'igual').length} de ${CMPD.files.length} arquivos mudaram desde o fim da rodada ${CMP} (${NAME[CMPD.worker] || CMPD.worker}, ${hm(CMPD.end)})</span>\n` +
+        CMPD.files.slice().sort((a, b) => ord[a.status] - ord[b.status] || b.mtime - a.mtime).map(f => `<div class="df cmp${f.file === diffFile ? ' sel' : ''}" data-file="${esc(f.file)}"><span class="st-${f.status === '?' ? 'igual' : f.status}">${f.status.toUpperCase()}</span><span>${byTag(f)}${esc(f.file)}</span></div>`).join('') +
+        '<div class="dsep"></div>' + `<div class="dmodes"><button class="dmode${CMPV === 'inter' ? ' on' : ''}" data-v="inter">O QUE A CORREÇÃO MUDOU</button><button class="dmode${CMPV === 'side' ? ' on' : ''}" data-v="side">LADO A LADO (CADA UM × HEAD)</button></div>` +
+        (CMPTXT && CMPTXT.file === diffFile ? (CMPV === 'inter' ? colorDiff(CMPTXT.inter) : `<div class="sbs"><div><div class="sbh">RODADA ${CMP} × HEAD</div><pre>${colorDiff(CMPTXT.before)}</pre></div><div><div class="sbh">AGORA × HEAD</div><pre>${colorDiff(CMPTXT.after)}</pre></div></div>`) : '<span style="color:var(--mute)">carregando…</span>');
+    }
+    else if (!DIFF) html = '<span style="color:var(--mute)">calculando o diff…</span>';
+    else if (!DIFF.files || !DIFF.files.length) html = modes + '<span style="color:var(--mute)">nenhuma alteração na worktree</span>';
+    else {
+      const tot = DIFF.files.reduce((a, f) => [a[0] + (f.add || 0), a[1] + (f.del || 0)], [0, 0]);
+      html = modes + `<span class="dm">${DIFF.files.length} arquivos · </span><span class="dadd">+${tot[0]}</span> <span class="ddel">-${tot[1]}</span>\n` +
+        DIFF.files.slice().reverse().map(f => `<div class="df${f.file === diffFile ? ' sel' : ''}" data-file="${esc(f.file)}"><span class="${f.out ? 'o' : 'dm'}">${esc(f.code)}</span><span class="${f.out && f.by !== 'claude' ? 'o' : ''}">${byTag(f)}${esc(f.file)}${f.out && f.by !== 'claude' ? ' ✕ FORA' : ''}</span><span class="dadd">+${f.add ?? '?'}</span><span class="ddel">-${f.del ?? '?'}</span></div>`).join('') +
+        '<div class="dsep"></div>' +
+        (DIFFTXT && DIFFTXT.file === diffFile ? colorDiff(DIFFTXT.diff) : '<span style="color:var(--mute)">carregando…</span>');
+    }
+  }
+  else {
+    if (!LOG) return;
+    const lines = LOG.text.split('\n').filter((l, i, a) => l.trim() || i < a.length - 1);
+    if (!lines.length || !LOG.text.trim()) html = t.worker === 'codex' ? '<span style="color:var(--mute)">o log ainda está vazio</span>' :
+      `<span style="color:var(--mute)">o antigravity só escreve o log quando termina. enquanto isso, as escritas dele:</span>\n\n` + (t.files.length ? t.files.map(f => `${byTag(f)}<span class="add">write</span> ${esc(f.file)}`).join('\n') : '<span style="color:var(--mute)">nenhuma escrita ainda</span>');
+    else html = lines.map((l, i) => colorLine(l, i === lines.length - 1)).join('\n');
+    if (t.state === 'running') html += '<span class="cur"></span>';
+  }
+  out.classList.toggle('md', tab === 'report' || tab === 'task');
+  if (tab !== 'log' && out.dataset.src === html) return;   // não redesenha as abas paradas a cada 1,5 s (mantém rolagem e seleção de texto)
+  out.dataset.src = html;
+  const keep = out.scrollTop; out.innerHTML = html;
+  if (tab === 'log' && follow) out.scrollTop = out.scrollHeight; else out.scrollTop = keep;
+}
+// sem seleção: feed ao vivo com as últimas linhas de cada IA
+function renderFeed() {
+  const out = $('out'), now = nowV();
+  out.classList.remove('md'); out.dataset.src = '';
+  const V = shown(VIEW());
+  out.innerHTML = V.filter(t => t.state === 'running' || t.state === 'failed').concat(V.filter(t => t.state === 'done' || t.state === 'stalled')).map(t => {
+    // edição do mestre depois da última rodada aparece como CLAUDE, não como o worker
+    const lastRun = (t.runs || [])[t.runs.length - 1], mAfter = t.master && t.master.at && lastRun && lastRun.end && t.master.at > lastRun.end;
+    const lines = mAfter ? t.files.filter(f => f.by === 'claude').slice(-4).map(f => ({ c: 1, l: `write ${f.file}` })) :
+      (t.worker === 'codex' && t.lines && t.lines.length ? t.lines : t.files.filter(f => f.by !== 'claude').slice(-4).map(f => `write ${f.file}`)).slice(-4).map(l => ({ l }));
+    return `<div class="feed" data-id="${esc(t.id)}"><div class="fh"><b style="color:${COL[t.worker] || '#fff'}">${NAME[t.worker] || t.worker}</b><span>${esc(t.id)}</span><span style="margin-left:auto;color:${stateCol(t)};font-weight:700">${tagOf(t)}</span></div><canvas class="hb" data-id="${esc(t.id)}" data-span="40"></canvas>${lines.length ? (mAfter ? `<div class="fl" style="color:var(--claude)">CLAUDE · mestre editou ${ago(now - t.master.at)} atrás</div>` : '') + lines.map(o => `<div class="fl">${o.c ? byTag({ by: 'claude' }) : ''}${esc(o.l)}</div>`).join('') : `<div class="fl">${t.state === 'running' ? 'trabalhando, ainda sem saída' : 'sem saída'}</div>`}</div>`;
+  }).join('') || '<span style="color:var(--mute)">nenhum worker ativo. despache uma tarefa e ela aparece no globo.</span>';
+}
+// critérios de pronto do TASK lado a lado com os checkboxes do REPORT desta rodada
+function critBlock(t) {
+  const T = t.criteria.task, R = t.criteria.report; if (!T.length) return '';
+  const nrm = s => s.toLowerCase().replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
+  const rows = T.map((c, i) => {
+    const r = R.find(x => nrm(x.text).slice(0, 30) === nrm(c.text).slice(0, 30)) || R[i];
+    const st = !R.length ? ['—', 'var(--mute)'] : !r ? ['?', COL.warn] : r.done ? ['✓', COL.done] : ['✗', COL.fail];
+    return `<tr><td style="color:${st[1]};text-align:center;font-weight:700">${st[0]}</td><td>${mdInline(c.text)}</td></tr>`;
+  }).join('');
+  const ok = R.filter(r => r.done).length;
+  return `<h2>Critérios de pronto × REPORT</h2><div class="tw"><table><thead><tr><th style="width:60px">REPORT</th><th>critério do TASK</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+    `<p style="color:var(--mute)">${R.length ? `${ok}/${R.length} marcados no REPORT desta rodada. Marcado não é verificado: os gates continuam com o mestre.` : 'o REPORT desta rodada ainda não existe.'}</p><hr>`;
+}
+// sem seleção, aba MÉTRICAS: tokens, tempo por tarefa e worker, rodadas de correção, aprovadas de primeira
+function renderMetrics() {
+  if (document.activeElement && document.activeElement.id === 'usd') return;   // não redesenha enquanto o preço é digitado
+  const out = $('out'), all = VIEW(), sy = STATE.sys || {};
+  const row = (label, col, ts) => {
+    const fin = ts.filter(t => t.state !== 'running'), done = ts.filter(t => t.state === 'done' && !oos(t) && !t.decision);
+    const avg = fin.length ? fin.reduce((s, t) => s + workTime(t), 0) / fin.length : null, tok = ts.reduce((s, t) => s + (t.tokens || 0), 0);
+    const rounds = ts.reduce((s, t) => s + Math.max(0, t.runs.length - 1), 0), first = done.filter(t => t.runs.length === 1).length;
+    return `<tr><td style="color:${col}">${label}</td><td style="text-align:right">${ts.length}</td><td style="text-align:right">${ts.filter(t => t.state === 'running').length}</td><td style="text-align:right">${avg == null ? '--' : clock(avg)}</td><td style="text-align:right">${rounds}</td><td style="text-align:right">${done.length ? `${first}/${done.length}` : '--'}</td><td style="text-align:right">${tok ? fmtTok(tok) : '--'}</td><td style="text-align:right">${usd(tok)}</td></tr>`;
+  };
+  const perTask = all.map(t => `<tr><td style="color:${COL[t.worker] || '#fff'}">${esc(t.id)}</td><td style="color:${stateCol(t)}">${tagOf(t)}</td><td style="text-align:right">${t.runs.length}</td><td style="text-align:right">${clock(workTime(t))}</td><td style="text-align:right">${fmtTok(t.tokens)}</td><td style="text-align:right">${usd(t.tokens)}</td><td style="text-align:right">${t.proc ? t.proc.cpu.toFixed(1) + '%' : '--'}</td></tr>`).join('');
+  const html = `<h2>Por worker</h2><div class="tw"><table><thead><tr><th>worker</th><th style="text-align:right">tasks</th><th style="text-align:right">run</th><th style="text-align:right">média</th><th style="text-align:right">↻</th><th style="text-align:right">1ª</th><th style="text-align:right">tokens</th><th style="text-align:right">US$</th></tr></thead><tbody>
+    ${row('CODEX', COL.codex, all.filter(t => t.worker === 'codex'))}${row('ANTIGRAVITY', COL.agy, all.filter(t => t.worker === 'agy'))}${row('ANTIGRAVITY-2', COL.agy2, all.filter(t => t.worker === 'agy2'))}${row('TOTAL', COL.ui, all)}</tbody></table></div>
+    <p style="color:var(--mute)">média = tempo de trabalho (soma das rodadas) por tarefa encerrada. ↻ = rodadas de correção (<code>-Continue</code>). 1ª = DONE em uma rodada só, sem alerta. tokens só do Codex (o agy não informa). janela: tarefas das últimas horas lidas pelo painel.</p>
+    <h2>Custo estimado</h2><p>US$ <input id="usd" type="number" min="0" step="0.1" value="${USD}" style="all:unset;border:1px solid var(--faint);width:64px;padding:1px 5px;color:var(--text);background:rgba(56,189,248,.05)"> por 1M tokens · total <b style="color:var(--warn)">${usd(all.reduce((s2, t) => s2 + (t.tokens || 0), 0))}</b></p>
+    <p style="color:var(--mute)">estimativa: tokens que o Codex informa no fim do log × o preço acima (média de entrada e saída do seu plano; ajuste). O Antigravity não informa tokens e fica de fora.</p>
+    <h2>Por onda</h2><div class="tw"><table><thead><tr><th>onda</th><th>janela</th><th style="text-align:right">tasks</th><th style="text-align:right">duração</th><th style="text-align:right">tokens</th><th style="text-align:right">US$</th></tr></thead><tbody>${wavesOf(all).map((wv, i) => { const tok = wv.tasks.reduce((a, t) => a + (t.tokens || 0), 0), end = Math.max(...wv.tasks.map(t => t.runs[t.runs.length - 1].end || nowV())); return `<tr><td style="color:var(--claude)">ONDA ${i + 1}</td><td>${hm(wv.s)}–${hm(end)}</td><td style="text-align:right">${wv.tasks.length}</td><td style="text-align:right">${clock(end - wv.s)}</td><td style="text-align:right">${fmtTok(tok || null)}</td><td style="text-align:right">${usd(tok)}</td></tr>`; }).join('')}</tbody></table></div>
+    <h2>Previsão</h2><div class="tw"><table><thead><tr><th>tarefa</th><th>rodada</th><th style="text-align:right">término</th><th style="text-align:right">falta</th><th style="text-align:right">base</th></tr></thead><tbody>${all.filter(t => t.state === 'running').map(t => { const e = etaOf(t); return `<tr><td style="color:${COL[t.worker] || 'var(--hi)'}">${esc(t.id)}</td><td>${t.runs.length > 1 ? (t.runs.length - 1) + ' ↻' : '1ª'}</td><td style="text-align:right">${e ? hm(e.end) : '--'}</td><td style="text-align:right;color:${e && e.left < 0 ? COL.warn : 'var(--text)'}">${e ? etaTxt(e) : 'sem histórico'}</td><td style="text-align:right;color:var(--mute)">${e ? e.n + ' rodadas' : '--'}</td></tr>`; }).join('') || '<tr><td colspan="5" style="color:var(--mute)">nenhuma task rodando</td></tr>'}</tbody></table></div>
+    <h2>Por tarefa</h2><div class="tw"><table><thead><tr><th>tarefa</th><th>estado</th><th style="text-align:right">rodadas</th><th style="text-align:right">trabalho</th><th style="text-align:right">tokens</th><th style="text-align:right">US$</th><th style="text-align:right">CPU</th></tr></thead><tbody>${perTask}</tbody></table></div>
+    <h2>Máquina</h2><p>CPU ${sy.cpu != null ? Math.round(sy.cpu) + '%' : '--'} · memória ${sy.memTotal ? gb(sy.memUsed) + ' de ' + gb(sy.memTotal) + ' GB' : '--'} · ${sy.cores || '?'} núcleos · ${all.filter(t => t.state === 'running').length} de ${sy.maxWorkers || 3} workers simultâneos</p>`;
+  out.classList.add('md');
+  if (out.dataset.src === html) return; out.dataset.src = html;
+  const keep = out.scrollTop; out.innerHTML = html; out.scrollTop = keep;
+}
+$('out').addEventListener('input', e => { if (e.target.id === 'usd') { USD = Math.max(0, +e.target.value || 0); try { localStorage.setItem('orq-usd', USD); } catch { } } });
+$('out').addEventListener('change', e => { if (e.target.id === 'usd') { e.target.blur(); $('out').dataset.src = ''; renderMetrics(); renderMeta(); } });
+$('out').addEventListener('pointerdown', e => {
+  const m = e.target.closest('.dmode');
+  if (m && m.dataset.v) { CMPV = m.dataset.v; $('out').dataset.src = ''; paintOut(); return; }
+  if (m) { CMP = +m.dataset.cmp || null; CMPD = null; CMPTXT = null; diffFile = null; $('out').dataset.src = ''; clearTimeout(diffTimer); paintOut(); pullDiff(); return; }
+  const d = e.target.closest('.df'); if (d) { diffFile = d.dataset.file; DIFFTXT = null; CMPTXT = null; clearTimeout(diffTimer); paintOut(); pullDiff(); return; }
+  const f = e.target.closest('.feed'); if (f) select(f.dataset.id);
+});
+function scrubTo(T) { const lo = LX ? LX.t0 : nowL() - 8 * 3600e3; if (T >= nowL() - 1000) return goLive(); REPLAY = Math.max(lo, T); document.body.classList.add('replay'); rRender = 0; syncRbar(); }
+function goLive() { REPLAY = null; RPLAY = false; document.body.classList.remove('replay'); syncRbar(); renderList(); if (!sel) renderMaster(); renderMeta(); }
+function syncRbar() {
+  const lo = LX ? LX.t0 : nowL() - 8 * 3600e3, hi = nowL();
+  if (document.activeElement !== $('rpos')) $('rpos').value = REPLAY == null ? 1000 : Math.round(1000 * (REPLAY - lo) / (hi - lo));
+  $('rlbl').textContent = REPLAY == null ? 'AO VIVO' : 'REPLAY ' + hm(REPLAY);
+  $('rplay').textContent = RPLAY ? '❚❚' : '▶'; $('rplay').classList.toggle('on', RPLAY); $('rlive').style.visibility = REPLAY == null ? 'hidden' : 'visible'; $('rspd').textContent = RSPD + '×';
+}
+function togglePlay() { if (REPLAY == null) scrubTo(LX ? LX.t0 : nowL() - 3600e3); RPLAY = !RPLAY; lastFrameP = performance.now(); syncRbar(); }
+$('rpos').addEventListener('input', e => { const lo = LX ? LX.t0 : nowL() - 8 * 3600e3, v = +e.target.value; RPLAY = false; if (v >= 1000) goLive(); else scrubTo(lo + v / 1000 * (nowL() - lo)); });
+$('rplay').addEventListener('click', togglePlay);
+$('rspd').addEventListener('click', () => { const S = [60, 120, 300, 600]; RSPD = S[(S.indexOf(RSPD) + 1) % S.length]; syncRbar(); });
+$('rlive').addEventListener('click', goLive);
+function applyTheme(light) {
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['claude', 'codex', 'agy', 'agy2', 'done', 'fail', 'ui', 'warn']) COL[k] = cs.getPropertyValue('--' + k).trim() || COL[k];
+  Object.assign(TH, light ? { light: true, bg: '#e9f0f6', b0: '#ffffff', b1: '#cfe0ee', lbl: '#4b6175' } : { light: false, bg: '#03060a', b0: '#0b1a28', b1: '#040a12', lbl: '#8aa0b4' });
+  $('btheme').classList.toggle('on', light); try { localStorage.setItem('orq-tema', light ? 'light' : 'dark'); } catch { }
+  $('out').dataset.src = ''; renderList(); renderMeta(); if (!sel) renderMaster();
+}
+function togglePres(v = !PRES) {
+  PRES = v; document.body.classList.toggle('pres', PRES); $('bpres').classList.toggle('on', PRES);
+  try { if (PRES && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => { }); if (!PRES && document.fullscreenElement) document.exitFullscreen().catch(() => { }); } catch { }
+}
+$('btheme').addEventListener('click', () => applyTheme(!TH.light));
+$('bpres').addEventListener('click', () => togglePres());
+$('bhelp').addEventListener('click', () => $('help').classList.toggle('on'));
+$('help').addEventListener('click', () => $('help').classList.remove('on'));
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && PRES) togglePres(false); });
+function moveSel(d) {
+  const L = shown(VIEW()); if (!L.length) return;
+  const i = L.findIndex(t => t.id === sel), n = L[i < 0 ? (d > 0 ? 0 : L.length - 1) : (i + d + L.length) % L.length];
+  select(n.id); const el = document.querySelector(`.it[data-id="${CSS.escape(n.id)}"]`); if (el) el.scrollIntoView({ block: 'nearest' });
+}
+addEventListener('keydown', e => {
+  if (e.target.matches && e.target.matches('input,textarea')) {
+    if (e.key === 'Escape') { if (e.target.id === 'q' && Q) { Q = ''; e.target.value = ''; renderList(); if (!sel) renderMaster(); } e.target.blur(); }
+    if (e.key === 'Enter' && e.target.id === 'q') { e.target.blur(); moveSel(1); }
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key;
+  if (k === 'Escape') { if ($('help').classList.contains('on')) $('help').classList.remove('on'); else if (sel) select(null); else if (PRES) togglePres(false); else if (REPLAY != null) goLive(); }
+  else if (k === 'ArrowDown' || k === 'j') { e.preventDefault(); moveSel(1); }
+  else if (k === 'ArrowUp' || k === 'k') { e.preventDefault(); moveSel(-1); }
+  else if (k === 'ArrowLeft' || k === 'ArrowRight') { if (REPLAY != null || k === 'ArrowLeft') { e.preventDefault(); RPLAY = false; scrubTo(nowV() + (k === 'ArrowLeft' ? -5 : 5) * 60e3); } }
+  else if (/^[1-5]$/.test(k)) { const b = [...$('tabs').querySelectorAll('button[data-tab]:not(.x)')][+k - 1]; if (b) b.click(); }
+  else if (k === '/') { e.preventDefault(); if (PRES) togglePres(false); $('q').focus(); }
+  else if (k === 'f' || k === 'F') { const i = FILTERS.findIndex(f => f[0] === FILT); setFilter(FILTERS[(i + 1) % FILTERS.length][0]); }
+  else if (k === ' ') { e.preventDefault(); togglePlay(); }
+  else if (k === 'l' || k === 'L') goLive();
+  else if (k === 'p' || k === 'P') togglePres();
+  else if (k === 't' || k === 'T') applyTheme(!TH.light);
+  else if (k === '?') $('help').classList.toggle('on');
+});
+{ let light = false; try { light = localStorage.getItem('orq-tema') === 'light'; } catch { } applyTheme(light); }
+$('q').value = Q; syncRbar();
+
+paintBell(); poll(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

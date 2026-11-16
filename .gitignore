@@ -1,0 +1,3 @@
+# cópias das rodadas tiradas pelo painel (contêm código dos repositórios orquestrados)
+scripts/painel/.rodadas/
+node_modules/
